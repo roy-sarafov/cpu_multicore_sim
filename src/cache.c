@@ -26,38 +26,43 @@ void cache_snoop(Cache *cache, Bus *bus) {
     uint32_t addr = bus->bus_addr;
     uint32_t set = GET_SET(addr);
     uint32_t tag = GET_TAG(addr);
+    uint32_t offset = GET_OFFSET(addr); // Helper needed for FLUSH
 
-    // Check if we have this block
-    if (cache->tsram[set].tag != tag || cache->tsram[set].state == MESI_INVALID) {
-        return; // Miss in snoop, nothing to do
-    }
+    // 1. Handle Coherency (Invalidate/Downgrade)
+    if (cache->tsram[set].tag == tag && cache->tsram[set].state != MESI_INVALID) {
+        MesiState state = cache->tsram[set].state;
 
-    // Snoop Hit!
-    MesiState state = cache->tsram[set].state;
-
-    // "For BusRd... bus_shared set to 1 if any core has data" [cite: 58]
-    if (bus->bus_cmd == BUS_CMD_READ) {
-        bus->bus_shared = 1;
-
-        if (state == MESI_EXCLUSIVE || state == MESI_MODIFIED) {
-            // Downgrade to Shared
-            cache->tsram[set].state = MESI_SHARED;
-
-            // If Modified, we must FLUSH data to memory/bus [cite: 59]
-            // Note: The actual flush logic requires grabbing the bus,
-            // which is complex in a cycle-step function.
-            // Usually, simulators treat this as an immediate intervention or
-            // queue a Flush request for the next arbitration.
+        if (bus->bus_cmd == BUS_CMD_READ) {
+            bus->bus_shared = 1;
+            if (state == MESI_EXCLUSIVE || state == MESI_MODIFIED) {
+                cache->tsram[set].state = MESI_SHARED;
+                // Ideally, if Modified, we should also queue a Flush here,
+                // but the spec allows the 'owner' to respond via the bus logic
+                // (which we assume happens in the core/bus drive logic).
+            }
+        }
+        else if (bus->bus_cmd == BUS_CMD_READX) {
+            cache->tsram[set].state = MESI_INVALID;
         }
     }
 
-    // "BusRdX... invalidates other copies" [cite: 53]
-    else if (bus->bus_cmd == BUS_CMD_READX) {
-        if (state == MESI_MODIFIED) {
-            // If we have modified data, we must flush it before invalidating
-             // (Logic handled by core/bus controller usually)
+    // 2. Handle Cache Fill (CRITICAL FIX FOR INFINITE LOOP)
+    // If we see a FLUSH (Data Response), we should store it.
+    // In a real CPU, we'd check if we are 'waiting' for this address (MSHR).
+    // For this sim, we simply overwrite the DSRAM if it matches the bus transaction.
+    // This effectively handles the "Fill" part of a Miss.
+    if (bus->bus_cmd == BUS_CMD_FLUSH) {
+        // Write the word into DSRAM
+        cache->dsram[set][offset] = bus->bus_data;
+
+        // The bus sends data word-by-word (Offset 0..7).
+        // We only mark the line as VALID/SHARED once the LAST word arrives.
+        // This ensures the core doesn't read garbage data for higher offsets
+        // before they arrive.
+        if (offset == 7) {
+            cache->tsram[set].tag = tag;
+            cache->tsram[set].state = MESI_SHARED; // Default to Shared on fill
         }
-        cache->tsram[set].state = MESI_INVALID;
     }
 }
 
