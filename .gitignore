@@ -1,0 +1,77 @@
+# --- C/C++ Compile Artifacts ---
+# Object files
+*.o
+*.obj
+
+# Libraries
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+
+# Executables (Add specific names of your programs if needed)
+*.exe
+*.out
+*.app
+# If your simulator has a specific output name, add it here:
+# my_cpu_sim
+
+# Debugging symbols (Common on macOS)
+*.dSYM/
+
+# --- Build & Output Directories ---
+# Standard build folders often created by IDEs or Makefiles
+bin/
+build/
+obj/
+Debug/
+Release/
+x64/
+x86/
+
+# --- IDEs & Editors ---
+
+# JetBrains (CLion, IntelliJ, etc.)
+.idea/
+cmake-build-*/
+
+# Visual Studio (classic)
+.vs/
+*.user
+*.suo
+*.sln
+*.vcxproj
+*.vcxproj.filters
+
+# VS Code
+# (You might want to share tasks.json, but usually settings are personal)
+.vscode/
+
+# Xcode (Mac)
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+
+# Eclipse
+.metadata/
+.settings/
+.classpath
+.project
+
+# Layout/Backup files from simple editors
+*~
+*.swp
+*.bak
+
+# --- Operating System Files ---
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+#  pdf
+*.pdf
