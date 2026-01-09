@@ -79,7 +79,7 @@ int main(int argc, char *argv[]) {
     Bus bus;
     bus_init(&bus);
 
-    MainMemory main_memory;
+    static MainMemory main_memory;
     memory_init(&main_memory);
     load_memin_file(&main_memory, &files);
 

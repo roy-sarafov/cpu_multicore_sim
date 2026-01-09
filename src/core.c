@@ -154,7 +154,10 @@ void stage_ex(Core *core) {
         case OP_SW:
             // Calculate Address: Rs + Rt
             out->ALUOutput = in->A + in->B;
+        case OP_JAL:
+            out->ALUOutput = in->PC + 1; // Calculate return address here
             break;
+
 
         default: out->ALUOutput = 0; break;
     }
@@ -254,7 +257,7 @@ void stage_decode(Core *core) {
         if (op == OP_JAL) {
             // Write R15 happens in WB, so we pass it down pipeline
             out->Rd_Index = 15;
-            out->ALUOutput = in->PC + 1;
+            // out->ALUOutput = in->PC + 1;
             // The JAL opcode needs to travel to WB to trigger the write
         }
 

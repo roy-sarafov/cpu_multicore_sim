@@ -202,13 +202,13 @@ void write_stats_files(Core cores[], SimFiles *files) {
         FILE *fp = fopen(files->stats_paths[c], "w");
         if (!fp) continue;
 
-        // Format: "key value" [cite: 98]
+        // Fix: Read cache stats from l1_cache, but stalls/cycles from core.stats
         fprintf(fp, "cycles %d\n", cores[c].stats.cycles);
         fprintf(fp, "instructions %d\n", cores[c].stats.instructions);
-        fprintf(fp, "read_hit %d\n", cores[c].stats.read_hits);
-        fprintf(fp, "write_hit %d\n", cores[c].stats.write_hits);
-        fprintf(fp, "read_miss %d\n", cores[c].stats.read_misses);
-        fprintf(fp, "write_miss %d\n", cores[c].stats.write_misses);
+        fprintf(fp, "read_hit %d\n", cores[c].l1_cache.read_hits);
+        fprintf(fp, "write_hit %d\n", cores[c].l1_cache.write_hits);
+        fprintf(fp, "read_miss %d\n", cores[c].l1_cache.read_miss);  // Singular, matches cache.c
+        fprintf(fp, "write_miss %d\n", cores[c].l1_cache.write_miss); // Singular, matches cache.c
         fprintf(fp, "decode_stall %d\n", cores[c].stats.decode_stalls);
         fprintf(fp, "mem_stall %d\n", cores[c].stats.mem_stalls);
 

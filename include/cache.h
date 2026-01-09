@@ -11,14 +11,20 @@ typedef struct {
 } TSRAM_Entry;
 
 typedef struct {
-    // DSRAM: Data Storage [cite: 41]
+    // DSRAM: Data Storage
     // 64 sets, each containing a block of 8 words
-    uint32_t dsram[NUM_CACHE_SETS][BLOCK_SIZE]; 
-    
-    // TSRAM: Tag and State Storage [cite: 42]
+    uint32_t dsram[NUM_CACHE_SETS][BLOCK_SIZE];
+
+    // TSRAM: Tag and State Storage
     TSRAM_Entry tsram[NUM_CACHE_SETS];
-    
+
     int core_id; // To know which core owns this cache
+
+    // --- ADD THESE MISSING FIELDS ---
+    int read_hits;
+    int write_hits;
+    int read_miss;   // Note: cache.c uses "read_miss" (singular)
+    int write_miss;  // Note: cache.c uses "write_miss" (singular)
 } Cache;
 
 void cache_init(Cache *cache, int core_id);
