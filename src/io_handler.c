@@ -89,42 +89,44 @@ void load_memin_file(MainMemory *mem, SimFiles *files) {
 void write_core_trace(FILE *fp, Core *core, int cycle) {
     fprintf(fp, "%d ", cycle);
 
+    // 1. FETCH COLUMN: Print current PC (Waiting to be fetched)
+    // If we are stalled/halted, this might stay same.
+    // Logic: If halt detected and PC is 0, print bubbles?
+    // Or just print PC. Standard is to print PC.
     // 1. FETCH COLUMN
-    // Check if it is a Bubble (Instruction is 0, PC is 0, and we aren't just starting/running valid code at 0)
-    // The safest check during a halt is:
-    if (core->if_id.Instruction == 0 && core->if_id.PC == 0 && core->halt_detected) {
+    // If we have detected a HALT, the Fetch unit is off. Print "---".
+    if (core->halt_detected) {
         fprintf(fp, "--- ");
     }
     else {
-        fprintf(fp, "%03X ", core->if_id.PC & 0xFFF);
+        fprintf(fp, "%03X ", core->pc & 0xFFF);
     }
 
-    // 2. DECODE COLUMN: Print what is now in ID_EX (result of decode)
+    // 2. DECODE COLUMN: Print IF/ID Latch (Waiting to be decoded)
+    // Check if empty/bubble (Instruction 0 usually implies bubble in this sim)
+    if (core->if_id.Instruction == 0 && core->if_id.PC == 0) fprintf(fp, "--- ");
+    else fprintf(fp, "%03X ", core->if_id.PC & 0xFFF);
+
+    // 3. EXECUTE COLUMN: Print ID/EX Latch (Waiting to be executed)
     if (!core->id_ex.valid) fprintf(fp, "--- ");
     else fprintf(fp, "%03X ", core->id_ex.PC & 0xFFF);
 
-    // 3. EXECUTE COLUMN: Print what is now in EX_MEM (result of execute)
+    // 4. MEMORY COLUMN: Print EX/MEM Latch (Waiting for memory)
     if (!core->ex_mem.valid) fprintf(fp, "--- ");
     else fprintf(fp, "%03X ", core->ex_mem.PC & 0xFFF);
 
-    // 4. MEMORY COLUMN: Print what is now in MEM_WB (result of memory)
-    if (!core->mem_wb.valid) fprintf(fp, "--- ");
-    else fprintf(fp, "%03X ", core->mem_wb.PC & 0xFFF);
-
-    // 5. WB COLUMN: Print the value we saved in stage_wb
-    // We check if last_wb_pc is non-zero. (Or strictly, check if stage_wb actually ran).
-    // For exact bubbles, you might need a `bool last_wb_valid` flag too.
-    // For now, assuming PC 0 is NOP/valid, this is usually fine:
-    // 5. WB COLUMN: Check the flag!
-    if (!core->last_wb_valid) {
+    // 5. WB COLUMN: Print MEM/WB Latch (Waiting for writeback)
+    // CHANGE: We now read core->mem_wb directly!
+    // Since we are PRE-execution, this latch has NOT been overwritten yet.
+    if (!core->mem_wb.valid) {
         fprintf(fp, "--- ");
     } else {
-        fprintf(fp, "%03X ", core->last_wb_pc & 0xFFF);
+        fprintf(fp, "%03X ", core->mem_wb.PC & 0xFFF);
     }
 
-    // Print Registers from the SNAPSHOT
+    // Print Registers
     for (int i = 2; i < 16; i++) {
-        fprintf(fp, "%08X", core->trace_regs[i]); // <--- USE trace_regs
+        fprintf(fp, "%08X", core->regs[i]); // Note: Use current regs, not trace_regs
         if (i < 15) fprintf(fp, " ");
     }
     fprintf(fp, "\n");

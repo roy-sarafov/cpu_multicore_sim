@@ -76,11 +76,10 @@ typedef struct {
     } stats;
     uint32_t trace_regs[16]; // Snapshot for the trace file
 
-    uint32_t last_wb_pc;
-    bool last_wb_valid;
     bool branch_pending;
     uint32_t branch_target;
     bool halt_detected; // New flag: "We saw a HALT, stop fetching!"
+    int wb_hazard_rd; // Stores the destination register of the instruction in WB stage
 
 } Core;
 

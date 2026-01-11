@@ -126,10 +126,13 @@ int main(int argc, char *argv[]) {
             if (cores[i].halted) {
                 continue;
             }
-            core_cycle(&cores[i], &bus);
-
             // Log Trace
             write_core_trace(trace_files[i], &cores[i], cycle);
+            // call cycle
+            core_cycle(&cores[i], &bus);
+
+
+
 
             if (!cores[i].halted) {
                 all_halted = false;
