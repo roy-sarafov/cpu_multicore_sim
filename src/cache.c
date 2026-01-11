@@ -1,140 +1,196 @@
 #include <string.h>
+#include <stdio.h>
 #include "cache.h"
 
-// Helper: Extract Tag and Set Index from Address
-// Address: [Tag (19 bits) | Set Index (6 bits) | Offset (3 bits) | 2 bits byte offset ignored]
-// Spec: Cache 512 words, Block 8 words -> 64 sets.
-// 32-bit addr >> 2 (word aligned).
-// Lower 3 bits: Block Offset. Next 6 bits: Set Index. Rest: Tag.
-#define GET_OFFSET(addr) (addr & 0x7)
-#define GET_SET(addr)    ((addr >> 3) & 0x3F)
-#define GET_TAG(addr)    ((addr >> 9))
-
 void cache_init(Cache *cache, int core_id) {
-    memset(cache, 0, sizeof(Cache));
+    memset(cache->dsram, 0, sizeof(cache->dsram));
+    memset(cache->tsram, 0, sizeof(cache->tsram));
     cache->core_id = core_id;
+    cache->read_hits = 0;
+    cache->write_hits = 0;
+    cache->read_miss = 0;
+    cache->write_miss = 0;
+    cache->waiting_for_write = false;
+    cache->snoop_result_shared = false;
+
+    // Snoop Filter / Latency Init
+    cache->is_waiting_for_fill = false;
+    cache->pending_addr = 0;
+    cache->is_flushing = false;
+    cache->flush_addr = 0;
+    cache->flush_offset = 0;
 }
-
-// -------------------------------------------------------------------------
-// Snooping Logic (Called every cycle to watch the bus)
-// -------------------------------------------------------------------------
-void cache_snoop(Cache *cache, Bus *bus) {
-    // If this core is the one originating the command, ignore snoop
-    if (bus->bus_origid == cache->core_id) return;
-    if (bus->bus_cmd == BUS_CMD_NO_CMD) return;
-
-    uint32_t addr = bus->bus_addr;
-    uint32_t set = GET_SET(addr);
-    uint32_t tag = GET_TAG(addr);
-    uint32_t offset = GET_OFFSET(addr);
-
-    // 1. Handle Coherency (Invalidate/Downgrade)
-    if (cache->tsram[set].tag == tag && cache->tsram[set].state != MESI_INVALID) {
-        MesiState state = cache->tsram[set].state;
-
-        if (bus->bus_cmd == BUS_CMD_READ) {
-            bus->bus_shared = 1;
-            if (state == MESI_EXCLUSIVE || state == MESI_MODIFIED) {
-                cache->tsram[set].state = MESI_SHARED;
-            }
-        }
-        else if (bus->bus_cmd == BUS_CMD_READX) {
-            cache->tsram[set].state = MESI_INVALID;
-        }
-    }
-
-    // 2. Handle Cache Fill
-    if (bus->bus_cmd == BUS_CMD_FLUSH) {
-        cache->dsram[set][offset] = bus->bus_data;
-
-        if (offset == 7) {
-            cache->tsram[set].tag = tag;
-
-            if (cache->waiting_for_write) {
-                // Was waiting for BusRdX (Write Miss) -> Always Modified
-                cache->tsram[set].state = MESI_MODIFIED;
-                cache->waiting_for_write = false;
-            } else {
-                // Was waiting for BusRd (Read Miss) -> Check the latched signal!
-
-                // --- FIX START ---
-                if (cache->snoop_result_shared) {
-                    cache->tsram[set].state = MESI_SHARED;     // Someone else has it
-                } else {
-                    cache->tsram[set].state = MESI_EXCLUSIVE;  // MINE ALONE!
-                }
-                // --- FIX END ---
-            }
-        }
-    }
-}
-// -------------------------------------------------------------------------
-// Core Read/Write Interface
-// -------------------------------------------------------------------------
 
 bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
-    uint32_t set = GET_SET(addr);
-    uint32_t tag = GET_TAG(addr);
-    uint32_t offset = GET_OFFSET(addr);
+    uint32_t set = (addr >> 3) & 0x3F; // Bits 8:3
+    uint32_t tag = addr >> 9;          // Bits 20:9
+    uint32_t offset = addr & 0x7;      // Bits 2:0
 
-    // Check Tag and Valid Bit
-    if (cache->tsram[set].tag == tag && cache->tsram[set].state != MESI_INVALID) {
-        // HIT
-        *data = cache->dsram[set][offset];
+    TSRAM_Entry *entry = &cache->tsram[set];
+
+    // Check for Hit
+    if (entry->state != MESI_INVALID && entry->tag == tag) {
         cache->read_hits++;
-        return true;
+        *data = cache->dsram[set][offset];
+        return true; // Hit
     }
 
-    // MISS
+    // Miss
     cache->read_miss++;
-
-    // --- [CRITICAL FIX] ---
-    // We must signal that we are waiting for a READ operation.
-    // This ensures cache_snoop sets the state to MESI_SHARED when data arrives.
     cache->waiting_for_write = false;
 
-    // Note: The logic to FILL the cache happens when the data returns from the Bus.
-    // The Core sees 'false' here, Stalls, and requests the Bus.
-    return false;
+    // --- SNOOP FILTER SETUP ---
+    cache->is_waiting_for_fill = true;
+    cache->pending_addr = addr;
+
+    return false; // Stall (Core will request bus)
 }
 
 bool cache_write(Cache *cache, uint32_t addr, uint32_t data, Bus *bus) {
-    uint32_t set = GET_SET(addr);
-    uint32_t tag = GET_TAG(addr);
-    uint32_t offset = GET_OFFSET(addr);
+    uint32_t set = (addr >> 3) & 0x3F;
+    uint32_t tag = addr >> 9;
+    uint32_t offset = addr & 0x7;
 
-    // Check Tag and Valid
-    if (cache->tsram[set].tag == tag && cache->tsram[set].state != MESI_INVALID) {
-        // HIT
+    TSRAM_Entry *entry = &cache->tsram[set];
 
-        // If state is Shared, we need to upgrade to Exclusive/Modified (BusRdX)
-        if (cache->tsram[set].state == MESI_SHARED) {
-            // --- [ADDITION 1] ---
-            // We are stalling to request ownership. Mark this!
-            cache->waiting_for_write = true;
+    // Check for Hit (Must be Modified or Exclusive to write without bus activity)
+    // Actually, in Write-Back/Write-Allocate:
+    // If S -> We need BusRdX (Upgrade) -> Treat as Miss behavior logic handled by Core/Bus
+    // If M or E -> We can write immediately.
 
-            // Return false to tell Core to stall and issue BusRdX
-            return false;
-        }
+    bool write_hit = (entry->state == MESI_MODIFIED || entry->state == MESI_EXCLUSIVE) && (entry->tag == tag);
 
-        // Write Hit (Exclusive or Modified)
-        cache->dsram[set][offset] = data;
-        cache->tsram[set].state = MESI_MODIFIED;
+    if (write_hit) {
         cache->write_hits++;
+        cache->dsram[set][offset] = data;
+        entry->state = MESI_MODIFIED; // Transition E -> M
         return true;
     }
 
-    // MISS
-    // --- [MODIFICATION 2] ---
-    // Prevent stat explosion: Only increment miss count if we weren't ALREADY waiting
+    // Miss (or Shared upgrade needed)
     if (!cache->waiting_for_write) {
-        cache->write_miss++;
+         cache->write_miss++;
     }
-
-    // --- [ADDITION 3] ---
-    // We are stalling for a Write Miss (Write Allocate). Mark this!
     cache->waiting_for_write = true;
 
-    // Core must stall and issue BusRdX (Write Allocate)
+    // --- SNOOP FILTER SETUP ---
+    cache->is_waiting_for_fill = true;
+    cache->pending_addr = addr;
+
     return false;
+}
+
+void cache_snoop(Cache *cache, Bus *bus) {
+    // 1. ACTIVE FLUSH: Are we in the middle of sending data?
+    if (cache->is_flushing) {
+
+        // Lock the bus so no one else uses it while we prepare/send data
+        bus->busy = true;
+
+        // Latency State Machine
+        // -1: Wait Cycle (SRAM Access)
+        //  0: Start Driving Data
+        if (cache->flush_offset < 0) {
+            cache->flush_offset++;
+            return;
+        }
+
+        // Drive the bus with our data
+        bus->bus_cmd = BUS_CMD_FLUSH;
+        bus->bus_addr = cache->flush_addr + cache->flush_offset;
+
+        uint32_t set = (cache->flush_addr >> 3) & 0x3F;
+        bus->bus_data = cache->dsram[set][cache->flush_offset];
+
+        bus->bus_shared = true;
+        bus->bus_origid = cache->core_id;
+
+        cache->flush_offset++;
+        if (cache->flush_offset >= 8) {
+            cache->is_flushing = false;
+        }
+        return;
+    }
+
+    // 2. STANDARD SNOOPING: Listen to the bus for Requests
+    if (bus->bus_cmd == BUS_CMD_READ || bus->bus_cmd == BUS_CMD_READX) {
+        uint32_t addr = bus->bus_addr;
+        uint32_t set = (addr >> 3) & 0x3F;
+        uint32_t tag = addr >> 9;
+
+        TSRAM_Entry *entry = &cache->tsram[set];
+
+        // Check for Tag Match and Valid State
+        if (entry->tag == tag && entry->state != MESI_INVALID) {
+
+            // "Set to 1 when answering a BusRd transaction"
+            if (bus->bus_cmd == BUS_CMD_READ) {
+                bus->bus_shared = true;
+            }
+
+            // MODIFIED: Flush data to requester
+            if (entry->state == MESI_MODIFIED) {
+                cache->is_flushing = true;
+                cache->flush_addr = addr & ~0x7;
+
+                // --- FIX: Start at -1 to create exactly 1 cycle of latency ---
+                cache->flush_offset = -1;
+                // -------------------------------------------------------------
+
+                // Update state immediately
+                if (bus->bus_cmd == BUS_CMD_READ) {
+                    entry->state = MESI_SHARED;
+                } else {
+                    entry->state = MESI_INVALID;
+                }
+            }
+            // EXCLUSIVE:
+            else if (entry->state == MESI_EXCLUSIVE) {
+                if (bus->bus_cmd == BUS_CMD_READ) {
+                    entry->state = MESI_SHARED;
+                } else {
+                    entry->state = MESI_INVALID;
+                }
+            }
+            // SHARED:
+            else if (entry->state == MESI_SHARED) {
+                if (bus->bus_cmd == BUS_CMD_READX) {
+                    entry->state = MESI_INVALID;
+                }
+            }
+        }
+    }
+
+    // 3. CACHE FILL: Accepting Data from Bus
+    if (bus->bus_cmd == BUS_CMD_FLUSH) {
+
+        // SNOOP FILTER
+        bool is_my_data = cache->is_waiting_for_fill &&
+                          ((bus->bus_addr & ~0x7) == (cache->pending_addr & ~0x7));
+
+        if (!is_my_data) return;
+
+        uint32_t set = (bus->bus_addr >> 3) & 0x3F;
+        uint32_t tag = bus->bus_addr >> 9;
+        int offset = bus->bus_addr & 0x7;
+
+        cache->dsram[set][offset] = bus->bus_data;
+
+        if (offset == 7) {
+            TSRAM_Entry *entry = &cache->tsram[set];
+            entry->tag = tag;
+            cache->is_waiting_for_fill = false;
+
+            if (cache->waiting_for_write) {
+                entry->state = MESI_MODIFIED;
+                cache->waiting_for_write = false;
+            } else {
+                if (cache->snoop_result_shared) {
+                    entry->state = MESI_SHARED;
+                } else {
+                    entry->state = MESI_EXCLUSIVE;
+                }
+            }
+        }
+    }
 }

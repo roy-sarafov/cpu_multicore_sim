@@ -20,14 +20,22 @@ typedef struct {
 
     int core_id; // To know which core owns this cache
 
-    // --- ADD THESE MISSING FIELDS ---
+    // Statistics
     int read_hits;
     int write_hits;
-    int read_miss;   // Note: cache.c uses "read_miss" (singular)
-    int write_miss;  // Note: cache.c uses "write_miss" (singular)
+    int read_miss;
+    int write_miss;
 
-    bool waiting_for_write; // True if the pending fill is for a Store (BusRdX)
+    // Existing Flags
+    bool waiting_for_write;   // True if the pending fill is for a Store (BusRdX)
     bool snoop_result_shared; // Stores if the bus line was shared during our request
+
+    // --- NEW FIELDS FOR SNOOP FILTERING ---
+    bool is_waiting_for_fill; // <--- ADD THIS: Are we currently waiting for data from memory?
+    uint32_t pending_addr;    // <--- ADD THIS: The exact address we are waiting for.
+    bool is_flushing;       // Are we currently sending data to the bus?
+    uint32_t flush_addr;    // The address we are flushing
+    int flush_offset;       // Current word offset (0-7) being flushed
 } Cache;
 
 void cache_init(Cache *cache, int core_id);
