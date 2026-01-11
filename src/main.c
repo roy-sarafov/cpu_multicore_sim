@@ -14,34 +14,22 @@ void gather_bus_requests(Core cores[], MainMemory *mem, bool requests[5]) {
     // Reset vector
     for (int i = 0; i < 5; i++) requests[i] = false;
 
-    // 1. Check Cores (0-3)
+    // RULE: If Memory is processing a read, NO CORE can request the bus.
+    // Only Memory is allowed to request (to send the Flush).
+    if (mem->processing_read) { // Use the flag you added to the struct
+        requests[4] = true;
+        return; // EXIT EARLY: Cores are blocked!
+    }
+
+    // Normal Logic (Same as before)
     for (int i = 0; i < NUM_CORES; i++) {
-        // If core is stalled specifically in MEM stage (and not halted), it needs bus
-        // We look at the EX_MEM latch to see if it's a valid Load/Store
         if (cores[i].stall && cores[i].ex_mem.valid) {
             Opcode op = cores[i].ex_mem.Op;
             if (op == OP_LW || op == OP_SW) {
-                // It's a memory stall, so it requests the bus
                 requests[i] = true;
             }
         }
     }
-
-    // 2. Check Main Memory (4)
-    // Memory assumes it always wants to reply if it has data ready.
-    // In our simple memory.c, we can assume if it's processing, it requests.
-    // However, memory.c usually responds immediately when latency timer hits 0.
-    // For this simulation, we'll let memory.c internal logic handle the "Grant" check
-    // inside memory_listen, but we need to pass a request 'true' here to ensure
-    // the arbiter considers it?
-    // Actually, memory usually has highest priority or specific slots.
-    // Our Round Robin includes ID 4. So we need to know if Mem is ready to send.
-    // We'll assume Memory requests if it has a pending response.
-    // (This requires peeking into memory state, or we just set requests[4] = true
-    // if we know it's active. For simplicity, we can let memory always request
-    // if it has a transaction pending. Since we don't have a public 'is_pending' flag
-    // in the header, we might need to add one or just assume logic handles it).
-    requests[4] = true; // Simpler approach: Memory always "wants" to reply if it can.
 }
 
 // --- Helper: Drive Bus ---
@@ -113,10 +101,12 @@ int main(int argc, char *argv[]) {
         gather_bus_requests(cores, &main_memory, requests);
         bus_arbitrate(&bus, requests);
 
-        // --- C. Drive Bus (If a Core won) ---
-        // If Memory won, it drives inside 'memory_listen' later.
+        // --- C. Drive Bus ---
         if (bus.current_grant < 4 && bus.current_grant >= 0) {
             drive_bus_from_core(&cores[bus.current_grant], &bus);
+
+            // ADD THIS: Release the bus wires immediately after command is sent
+            bus.busy = false;
         }
 
         // --- D. Memory Response ---
@@ -132,6 +122,10 @@ int main(int argc, char *argv[]) {
         // --- F. Core Execution ---
         bool all_halted = true;
         for (int i = 0; i < NUM_CORES; i++) {
+            // IF ALREADY HALTED, SKIP EVERYTHING (Logic & Trace)
+            if (cores[i].halted) {
+                continue;
+            }
             core_cycle(&cores[i], &bus);
 
             // Log Trace

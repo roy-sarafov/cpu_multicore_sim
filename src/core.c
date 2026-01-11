@@ -47,7 +47,14 @@ void core_init(Core *core, int id, const char *imem_path) {
 void stage_wb(Core *core) {
     MEM_WB_Latch *in = &core->mem_wb;
 
+    // Reset validity at start of stage
+    core->last_wb_valid = false;
+
     if (!in->valid) return;
+
+    // We have a valid instruction finishing!
+    core->last_wb_pc = in->PC;
+    core->last_wb_valid = true; // <--- MARK AS VALID
 
     // R0 is always 0. R1 is read-only (immediate). [cite: 21, 22]
     // Only write to R2-R15.
@@ -154,6 +161,7 @@ void stage_ex(Core *core) {
         case OP_SW:
             // Calculate Address: Rs + Rt
             out->ALUOutput = in->A + in->B;
+            break;
         case OP_JAL:
             out->ALUOutput = in->PC + 1; // Calculate return address here
             break;
@@ -169,17 +177,31 @@ void stage_decode(Core *core) {
     IF_ID_Latch *in = &core->if_id;
     ID_EX_Latch *out = &core->id_ex;
 
-    // If stalled by MEM stage, freeze.
     if (core->stall) return;
 
-    // If this latch is empty (bubble), pass a bubble to EX
-    if (in->Instruction == 0 && in->PC == 0) { // Simple check for empty/nop
-         out->valid = false;
-         return;
+    // 1. If we ALREADY detected a Halt in a previous cycle,
+    // kill everything incoming (turn 009 into a bubble).
+    if (core->halt_detected) {
+        out->valid = false;
+        return;
+    }
+
+    // Handle Bubbles
+    if (in->Instruction == 0 && in->PC == 0) {
+        out->valid = false;
+        return;
     }
 
     uint32_t inst = in->Instruction;
     Opcode op = GET_OPCODE(inst);
+
+    // 2. Detect NEW Halt
+    if (op == OP_HALT) {
+        core->halt_detected = true;
+        // DELETE THE MEMSET LINE! Do not flush if_id here.
+        // We want the HALT instruction itself to proceed to ID_EX.
+        // The "Stop" will happen next cycle (Step 1 above).
+    }
     uint32_t rs = GET_RS(inst);
     uint32_t rt = GET_RT(inst);
     uint32_t rd = GET_RD(inst);
@@ -269,7 +291,8 @@ void stage_decode(Core *core) {
         // So we update core->pc, but we DO NOT flush IF_ID.
         // The next Fetch cycle will fetch from the NEW target.
         uint32_t target = (rd == 1) ? imm_sext : core->regs[rd]; // Handle JAL R1 usage
-        core->pc = target & 0x3FF;
+        core->branch_pending = true;
+        core->branch_target = target & 0x3FF;
     }
 
     // Fill Output Latch
@@ -287,13 +310,20 @@ void stage_decode(Core *core) {
 }
 
 void stage_fetch(Core *core) {
-    // 1. Check for Memory Stall (Pipeline Freeze)
-    if (core->stall) {
-        // If Mem stage is stalled, we do nothing. Everything stays frozen.
+    // 1. Stall Check
+    if (core->stall) return;
+
+    bool is_halt_in_decode = (core->id_ex.valid && core->id_ex.Op == OP_HALT);
+
+    // If we detected a halt globally, AND the Halt instruction has already moved past Decode...
+    // Then STOP fetching.
+    if (core->halt_detected && !is_halt_in_decode) {
+        core->if_id.Instruction = 0; // Bubble
+        core->if_id.PC = 0;          // Bubble
         return;
     }
 
-    // 2. Check for Decode Stall (Hazard)
+    // 3. Check for Decode Stall (Hazard)
     // We need to re-detect the hazard here or assume if ID/EX is invalid it was a bubble?
     // No, cleaner way: Re-run the hazard check or use a flag.
     // Let's replicate the check briefly or look at `stats.decode_stalls`?
@@ -323,7 +353,9 @@ void stage_fetch(Core *core) {
 
         #define CHECK_HAZARD_FETCH(reg_idx) \
         if (reg_idx >= 2) { \
-            if (core->id_ex.valid && core->id_ex.Rd_Index == reg_idx) decode_stall = true; \
+            if (core->id_ex.valid && core->id_ex.Rd_Index == reg_idx) { \
+                if (core->id_ex.PC != core->if_id.PC) decode_stall = true; \
+            } \
             if (core->ex_mem.valid && core->ex_mem.Rd_Index == reg_idx) decode_stall = true; \
             if (core->mem_wb.valid && core->mem_wb.Rd_Index == reg_idx) decode_stall = true; \
         }
@@ -337,11 +369,19 @@ void stage_fetch(Core *core) {
 
     // 3. Normal Fetch
     if (core->pc < 1024) {
+        // 1. Fetch the instruction (This is the Delay Slot!)
         core->if_id.Instruction = core->instruction_memory[core->pc];
         core->if_id.PC = core->pc;
 
-        // PC Increment
-        core->pc++;
+        // 2. Determine Next PC
+        if (core->branch_pending) {
+            // The delay slot is done. Now jump to the target.
+            core->pc = core->branch_target;
+            core->branch_pending = false;
+        } else {
+            // Normal increment
+            core->pc++;
+        }
     } else {
         // Out of bounds (shouldn't happen with correct HALT)
         core->if_id.Instruction = 0; // NOP
@@ -350,6 +390,7 @@ void stage_fetch(Core *core) {
 
 void core_cycle(Core *core, Bus *bus) {
     if (core->halted) return;
+    memcpy(core->trace_regs, core->regs, sizeof(core->regs));
 
     core->stats.cycles++;
 

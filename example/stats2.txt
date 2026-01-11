@@ -1,8 +1,8 @@
 cycles 500001
-instructions 0
-read_hit 0
+instructions 3
+read_hit 2
 write_hit 0
-read_miss 499998
+read_miss 48
 write_miss 0
-decode_stall 0
-mem_stall 499998
+decode_stall 2
+mem_stall 499993

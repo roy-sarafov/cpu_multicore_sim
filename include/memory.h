@@ -6,6 +6,7 @@
 
 typedef struct {
     uint32_t data[MAIN_MEMORY_SIZE];
+    bool processing_read;
 } MainMemory;
 
 void memory_init(MainMemory *mem);

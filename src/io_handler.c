@@ -87,49 +87,44 @@ void load_memin_file(MainMemory *mem, SimFiles *files) {
 // --- Trace Functions ---
 
 void write_core_trace(FILE *fp, Core *core, int cycle) {
-    // Only print if at least one stage is active? Spec: "In every clock cycle that at least one stage is active" [cite: 85]
-    // Checking if halted is usually enough, or check if pipeline is not all bubbles.
-    // For simplicity, we print until halt.
+    fprintf(fp, "%d ", cycle);
 
-    fprintf(fp, "%d ", cycle); // Decimal cycle [cite: 87]
+    // 1. FETCH COLUMN
+    // Check if it is a Bubble (Instruction is 0, PC is 0, and we aren't just starting/running valid code at 0)
+    // The safest check during a halt is:
+    if (core->if_id.Instruction == 0 && core->if_id.PC == 0 && core->halt_detected) {
+        fprintf(fp, "--- ");
+    }
+    else {
+        fprintf(fp, "%03X ", core->if_id.PC & 0xFFF);
+    }
 
-    // Print Stages: Fetch, Decode, Exec, Mem, WB
-    // Format: 3 hex digits or "---" [cite: 87, 88]
-
-    // Fetch
-    // We print the PC of the instruction currently in that stage.
-    // Spec is slightly ambiguous: "PC of the instruction that is in the stage".
-    // For Fetch, it's the `core->pc` being fetched? Or the one in IF_ID?
-    // Usually "Fetch" column means the PC being fetched NOW.
-    fprintf(fp, "%03X ", core->pc & 0xFFF); // Assuming fetch is always active unless halted?
-    // Actually, if we stall fetch, do we print "---"?
-    // "If stage is inactive (e.g. bubble)... print ---"[cite: 88].
-    // If we just fetched into IF_ID, that is the instruction "in Fetch" relative to pipeline diagrams.
-    // Let's stick to: FETCH column = current PC pointer.
-
-    // Decode (IF_ID latch)
-    // If instruction is 0 (NOP/Bubble), print ---?
-    // Or check valid bit? C struct doesn't have valid bit for IF_ID (always fetches), but 0 is usually bubble.
-    if (core->if_id.Instruction == 0 && core->if_id.PC == 0) fprintf(fp, "--- ");
-    else fprintf(fp, "%03X ", core->if_id.PC & 0xFFF);
-
-    // Execute (ID_EX latch)
+    // 2. DECODE COLUMN: Print what is now in ID_EX (result of decode)
     if (!core->id_ex.valid) fprintf(fp, "--- ");
     else fprintf(fp, "%03X ", core->id_ex.PC & 0xFFF);
 
-    // Memory (EX_MEM latch)
+    // 3. EXECUTE COLUMN: Print what is now in EX_MEM (result of execute)
     if (!core->ex_mem.valid) fprintf(fp, "--- ");
     else fprintf(fp, "%03X ", core->ex_mem.PC & 0xFFF);
 
-    // Writeback (MEM_WB latch)
+    // 4. MEMORY COLUMN: Print what is now in MEM_WB (result of memory)
     if (!core->mem_wb.valid) fprintf(fp, "--- ");
     else fprintf(fp, "%03X ", core->mem_wb.PC & 0xFFF);
 
-    // Print Registers R2-R15
-    // "R2 R3 ... R15" [cite: 86]
-    // "8 hex digits" [cite: 89]
+    // 5. WB COLUMN: Print the value we saved in stage_wb
+    // We check if last_wb_pc is non-zero. (Or strictly, check if stage_wb actually ran).
+    // For exact bubbles, you might need a `bool last_wb_valid` flag too.
+    // For now, assuming PC 0 is NOP/valid, this is usually fine:
+    // 5. WB COLUMN: Check the flag!
+    if (!core->last_wb_valid) {
+        fprintf(fp, "--- ");
+    } else {
+        fprintf(fp, "%03X ", core->last_wb_pc & 0xFFF);
+    }
+
+    // Print Registers from the SNAPSHOT
     for (int i = 2; i < 16; i++) {
-        fprintf(fp, "%08X", core->regs[i]);
+        fprintf(fp, "%08X", core->trace_regs[i]); // <--- USE trace_regs
         if (i < 15) fprintf(fp, " ");
     }
     fprintf(fp, "\n");

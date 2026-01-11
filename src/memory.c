@@ -10,10 +10,16 @@ void memory_init(MainMemory *mem) {
     memset(mem->data, 0, sizeof(uint32_t) * MAIN_MEMORY_SIZE);
 }
 
+bool memory_is_active(MainMemory *mem) {
+    // You might need to make 'processing_read' a struct member instead of a static variable
+    // inside memory_listen for this to work cleanly.
+    // For now, if you kept it static, move it to the struct in memory.h!
+    return mem->processing_read;
+}
+
 void memory_listen(MainMemory *mem, Bus *bus) {
     static int latency_timer = 0;
     static uint32_t target_addr = 0;
-    static bool processing_read = false;
     static int word_offset = 0; // Sending words 0..7 of the block
 
     // 1. Check for incoming writes (Flush from a Core)
@@ -28,8 +34,8 @@ void memory_listen(MainMemory *mem, Bus *bus) {
         // If memory was trying to respond to a read for this address,
         // the Core's Flush overrides us (or satisfies the request).
         // We abort our own read processing to avoid bus contention.
-        if (processing_read && (bus->bus_addr & ~0x7) == (target_addr & ~0x7)) {
-            processing_read = false;
+        if (mem->processing_read && (bus->bus_addr & ~0x7) == (target_addr & ~0x7)) {
+            mem->processing_read = false;
             latency_timer = 0;
         }
     }
@@ -37,8 +43,8 @@ void memory_listen(MainMemory *mem, Bus *bus) {
     // 2. Handle Read Requests
     if (bus->bus_cmd == BUS_CMD_READ || bus->bus_cmd == BUS_CMD_READX) {
         // Only accept if we aren't already busy, or if it's a new request
-        if (!processing_read) {
-            processing_read = true;
+        if (!mem->processing_read) {
+            mem->processing_read = true;
             target_addr = bus->bus_addr;
             latency_timer = 16; // "First word... latency of 16 clock cycles" [cite: 55]
             word_offset = 0;
@@ -46,7 +52,7 @@ void memory_listen(MainMemory *mem, Bus *bus) {
     }
 
     // 3. Process Latency and Send Data
-    if (processing_read) {
+    if (mem->processing_read) {
         if (latency_timer > 0) {
             latency_timer--;
         } else {
@@ -70,7 +76,7 @@ void memory_listen(MainMemory *mem, Bus *bus) {
 
                 // If we sent the last word (offset 8), we are done
                 if (word_offset >= 8) {
-                    processing_read = false;
+                    mem->processing_read = false;
                     bus->busy = false; // Release bus
                 }
             }

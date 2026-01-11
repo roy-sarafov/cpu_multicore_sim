@@ -1,0 +1,1 @@
+halt $zero, $zero, $zero, 0
