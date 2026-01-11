@@ -93,6 +93,27 @@ int main(int argc, char *argv[]) {
     bool active = true;
 
     while (active) {
+
+        // --- F. Core Execution ---
+        bool all_halted = true;
+        for (int i = 0; i < NUM_CORES; i++) {
+            // IF ALREADY HALTED, SKIP EVERYTHING (Logic & Trace)
+            if (cores[i].halted) {
+                continue;
+            }
+            // Log Trace
+            write_core_trace(trace_files[i], &cores[i], cycle);
+            // call cycle
+            core_cycle(&cores[i], &bus);
+
+
+
+
+            if (!cores[i].halted) {
+                all_halted = false;
+            }
+        }
+
         // --- A. Start of Cycle ---
         bus_reset_signals(&bus);
 
@@ -119,23 +140,13 @@ int main(int argc, char *argv[]) {
             cache_snoop(&cores[i].l1_cache, &bus);
         }
 
-        // --- F. Core Execution ---
-        bool all_halted = true;
-        for (int i = 0; i < NUM_CORES; i++) {
-            // IF ALREADY HALTED, SKIP EVERYTHING (Logic & Trace)
-            if (cores[i].halted) {
-                continue;
-            }
-            // Log Trace
-            write_core_trace(trace_files[i], &cores[i], cycle);
-            // call cycle
-            core_cycle(&cores[i], &bus);
-
-
-
-
-            if (!cores[i].halted) {
-                all_halted = false;
+        // --- NEW: Latch the Shared Signal ---
+        // If a Read transaction just happened, the requester needs to know
+        // if anyone else had the data (to decide Exclusive vs Shared).
+        if (bus.bus_cmd == BUS_CMD_READ) {
+            // The originator of the request saves the result
+            if (bus.bus_origid < 4) {
+                cores[bus.bus_origid].l1_cache.snoop_result_shared = bus.bus_shared;
             }
         }
 

@@ -25,6 +25,9 @@ typedef struct {
     int write_hits;
     int read_miss;   // Note: cache.c uses "read_miss" (singular)
     int write_miss;  // Note: cache.c uses "write_miss" (singular)
+
+    bool waiting_for_write; // True if the pending fill is for a Store (BusRdX)
+    bool snoop_result_shared; // Stores if the bus line was shared during our request
 } Cache;
 
 void cache_init(Cache *cache, int core_id);

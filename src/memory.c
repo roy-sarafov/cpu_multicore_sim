@@ -46,14 +46,14 @@ void memory_listen(MainMemory *mem, Bus *bus) {
         if (!mem->processing_read) {
             mem->processing_read = true;
             target_addr = bus->bus_addr;
-            latency_timer = 16; // "First word... latency of 16 clock cycles" [cite: 55]
+            latency_timer = 16; // "First word... latency of 16 clock cycles"
             word_offset = 0;
         }
     }
 
     // 3. Process Latency and Send Data
     if (mem->processing_read) {
-        if (latency_timer > 0) {
+        if (latency_timer >= 0) {
             latency_timer--;
         } else {
             // Timer finished, we need the bus to send data

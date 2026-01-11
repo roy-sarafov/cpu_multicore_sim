@@ -45,35 +45,66 @@ void core_init(Core *core, int id, const char *imem_path) {
 // --- Pipeline Stages ---
 
 void stage_wb(Core *core) {
-    MEM_WB_Latch *in = &core->mem_wb;
-
-    // 1. Reset the hazard tracker at the start of the stage
+    // 1. Reset the hazard tracker at the very start
+    // This clears the flag from the previous cycle so we don't stall unnecessarily.
     core->wb_hazard_rd = 0;
 
-    if (!in->valid) return;
+    if (core->stall) return;
+    if (!core->mem_wb.valid) return;
 
-    // 2. If this is a valid write to R2-R15, publish the hazard
-    if (in->Rd_Index >= 2) {
-        core->wb_hazard_rd = in->Rd_Index;
+    MEM_WB_Latch *in = &core->mem_wb;
+    Opcode op = in->Op;
 
-        // --- Existing Write Logic ---
-        uint32_t write_data;
-        if (in->Op == OP_LW) {
-            write_data = in->MemData;
-        } else {
-            write_data = in->ALUOutput;
-        }
-        core->regs[in->Rd_Index] = write_data;
+    // 2. Handle HALT immediately
+    if (op == OP_HALT) {
+        core->halted = true;
+        return;
     }
 
-    if (in->Op == OP_HALT) {
-        core->halted = true;
+    // 3. Determine if this instruction SHOULD write to a register
+    // By default, ALU ops and Loads write. Stores and Branches do NOT.
+    bool write_enable = true;
+
+    if (op == OP_SW ||
+        op == OP_BEQ || op == OP_BNE ||
+        op == OP_BLT || op == OP_BGT ||
+        op == OP_BLE || op == OP_BGE ) {
+        write_enable = false;
+        }
+
+    // 4. Perform the Write Back
+    if (write_enable) {
+        uint32_t dest_reg = in->Rd_Index;
+        uint32_t write_data;
+
+        // A. Determine Data Source
+        if (op == OP_LW) {
+            write_data = in->MemData;
+        } else if (op == OP_JAL) {
+            // JAL is special: It writes PC+1 to R15
+            dest_reg = 15;
+            write_data = in->PC + 1;
+        } else {
+            // Standard ALU arithmetic (Add, Sub, etc.)
+            write_data = in->ALUOutput;
+        }
+
+        // B. Write to Register File (Only R2-R15 are writable)
+        if (dest_reg >= 2 && dest_reg < 16) {
+            core->regs[dest_reg] = write_data;
+
+            // C. Publish the Hazard
+            // We tell the Decode stage: "I am writing to this register NOW."
+            // This allows the Decode stage to stall if it tries to read this specific reg.
+            core->wb_hazard_rd = dest_reg;
+        }
     }
 }
 
 void stage_mem(Core *core, Bus *bus) {
     EX_MEM_Latch *in = &core->ex_mem;
     MEM_WB_Latch *out = &core->mem_wb;
+    uint32_t rd_data = core->regs[in->Rd_Index];
     out->valid = false;
     if (!in->valid) {
         return;
@@ -87,7 +118,7 @@ void stage_mem(Core *core, Bus *bus) {
             core->stats.mem_stalls++;
         }
     } else if (in->Op == OP_SW) {
-        if (cache_write(&core->l1_cache, in->ALUOutput, in->B, bus)) {
+        if (cache_write(&core->l1_cache, in->ALUOutput, rd_data, bus)) {
             mem_busy = false;
         } else {
             mem_busy = true;
@@ -171,6 +202,12 @@ void stage_decode(Core *core) {
     if (op != OP_JAL) {
         CHECK_HAZARD(rt);
     }
+    if (op == OP_SW ||
+        op == OP_BEQ || op == OP_BNE ||
+        op == OP_BLT || op == OP_BGT ||
+        op == OP_BLE || op == OP_BGE) {
+        CHECK_HAZARD(rd);
+    }
     if (hazard) {
         out->valid = false;
         core->stats.decode_stalls++;
@@ -219,6 +256,7 @@ void stage_fetch(Core *core) {
         uint32_t inst = core->if_id.Instruction;
         uint32_t rs = GET_RS(inst);
         uint32_t rt = GET_RT(inst);
+        uint32_t rd = GET_RD(inst);
         Opcode op = GET_OPCODE(inst);
         #define CHECK_HAZARD_FETCH(reg_idx) \
         if (reg_idx >= 2) { \
@@ -231,6 +269,12 @@ void stage_fetch(Core *core) {
         }
         CHECK_HAZARD_FETCH(rs);
         if (op != OP_JAL) { CHECK_HAZARD_FETCH(rt); }
+        if (op == OP_SW ||
+        op == OP_BEQ || op == OP_BNE ||
+        op == OP_BLT || op == OP_BGT ||
+        op == OP_BLE || op == OP_BGE) {
+            CHECK_HAZARD_FETCH(rd);
+        }
     }
     if (decode_stall) {
         return;

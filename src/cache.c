@@ -26,7 +26,7 @@ void cache_snoop(Cache *cache, Bus *bus) {
     uint32_t addr = bus->bus_addr;
     uint32_t set = GET_SET(addr);
     uint32_t tag = GET_TAG(addr);
-    uint32_t offset = GET_OFFSET(addr); // Helper needed for FLUSH
+    uint32_t offset = GET_OFFSET(addr);
 
     // 1. Handle Coherency (Invalidate/Downgrade)
     if (cache->tsram[set].tag == tag && cache->tsram[set].state != MESI_INVALID) {
@@ -36,9 +36,6 @@ void cache_snoop(Cache *cache, Bus *bus) {
             bus->bus_shared = 1;
             if (state == MESI_EXCLUSIVE || state == MESI_MODIFIED) {
                 cache->tsram[set].state = MESI_SHARED;
-                // Ideally, if Modified, we should also queue a Flush here,
-                // but the spec allows the 'owner' to respond via the bus logic
-                // (which we assume happens in the core/bus drive logic).
             }
         }
         else if (bus->bus_cmd == BUS_CMD_READX) {
@@ -46,26 +43,31 @@ void cache_snoop(Cache *cache, Bus *bus) {
         }
     }
 
-    // 2. Handle Cache Fill (CRITICAL FIX FOR INFINITE LOOP)
-    // If we see a FLUSH (Data Response), we should store it.
-    // In a real CPU, we'd check if we are 'waiting' for this address (MSHR).
-    // For this sim, we simply overwrite the DSRAM if it matches the bus transaction.
-    // This effectively handles the "Fill" part of a Miss.
+    // 2. Handle Cache Fill
     if (bus->bus_cmd == BUS_CMD_FLUSH) {
-        // Write the word into DSRAM
         cache->dsram[set][offset] = bus->bus_data;
 
-        // The bus sends data word-by-word (Offset 0..7).
-        // We only mark the line as VALID/SHARED once the LAST word arrives.
-        // This ensures the core doesn't read garbage data for higher offsets
-        // before they arrive.
         if (offset == 7) {
             cache->tsram[set].tag = tag;
-            cache->tsram[set].state = MESI_SHARED; // Default to Shared on fill
+
+            if (cache->waiting_for_write) {
+                // Was waiting for BusRdX (Write Miss) -> Always Modified
+                cache->tsram[set].state = MESI_MODIFIED;
+                cache->waiting_for_write = false;
+            } else {
+                // Was waiting for BusRd (Read Miss) -> Check the latched signal!
+
+                // --- FIX START ---
+                if (cache->snoop_result_shared) {
+                    cache->tsram[set].state = MESI_SHARED;     // Someone else has it
+                } else {
+                    cache->tsram[set].state = MESI_EXCLUSIVE;  // MINE ALONE!
+                }
+                // --- FIX END ---
+            }
         }
     }
 }
-
 // -------------------------------------------------------------------------
 // Core Read/Write Interface
 // -------------------------------------------------------------------------
@@ -86,6 +88,11 @@ bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
     // MISS
     cache->read_miss++;
 
+    // --- [CRITICAL FIX] ---
+    // We must signal that we are waiting for a READ operation.
+    // This ensures cache_snoop sets the state to MESI_SHARED when data arrives.
+    cache->waiting_for_write = false;
+
     // Note: The logic to FILL the cache happens when the data returns from the Bus.
     // The Core sees 'false' here, Stalls, and requests the Bus.
     return false;
@@ -102,8 +109,12 @@ bool cache_write(Cache *cache, uint32_t addr, uint32_t data, Bus *bus) {
 
         // If state is Shared, we need to upgrade to Exclusive/Modified (BusRdX)
         if (cache->tsram[set].state == MESI_SHARED) {
-             // Return false to tell Core to stall and issue BusRdX
-             return false;
+            // --- [ADDITION 1] ---
+            // We are stalling to request ownership. Mark this!
+            cache->waiting_for_write = true;
+
+            // Return false to tell Core to stall and issue BusRdX
+            return false;
         }
 
         // Write Hit (Exclusive or Modified)
@@ -114,7 +125,16 @@ bool cache_write(Cache *cache, uint32_t addr, uint32_t data, Bus *bus) {
     }
 
     // MISS
-    cache->write_miss++;
+    // --- [MODIFICATION 2] ---
+    // Prevent stat explosion: Only increment miss count if we weren't ALREADY waiting
+    if (!cache->waiting_for_write) {
+        cache->write_miss++;
+    }
+
+    // --- [ADDITION 3] ---
+    // We are stalling for a Write Miss (Write Allocate). Mark this!
+    cache->waiting_for_write = true;
+
     // Core must stall and issue BusRdX (Write Allocate)
     return false;
 }

@@ -1,8 +1,8 @@
-cycles 500001
-instructions 3
-read_hit 2
-write_hit 0
-read_miss 48
-write_miss 0
-decode_stall 3
-mem_stall 499992
+cycles 1193
+instructions 508
+read_hit 102
+write_hit 102
+read_miss 50
+write_miss 1
+decode_stall 606
+mem_stall 75
