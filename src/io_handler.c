@@ -217,9 +217,20 @@ void write_memout_file(MainMemory *mem, SimFiles *files) {
     FILE *fp = fopen(files->memout_path, "w");
     if (!fp) return;
 
-    // Dump entire memory (size 2^20) [cite: 81]
+    // 1. Find the highest address that has non-zero data
+    int max_addr = -1;
     for (int i = 0; i < MAIN_MEMORY_SIZE; i++) {
+        if (mem->data[i] != 0) {
+            max_addr = i;
+        }
+    }
+
+    // 2. Print from 0 up to max_addr
+    // If memory is completely empty (max_addr == -1), this loop won't run,
+    // producing an empty file (which is valid for empty memory).
+    for (int i = 0; i <= max_addr; i++) {
         fprintf(fp, "%08X\n", mem->data[i]);
     }
+
     fclose(fp);
 }

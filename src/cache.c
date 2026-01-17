@@ -108,6 +108,7 @@ void cache_snoop(Cache *cache, Bus *bus) {
         cache->flush_offset++;
         if (cache->flush_offset >= 8) {
             cache->is_flushing = false;
+            bus->busy = false; // <--- ADD THIS LINE to unlock the bus!
         }
         return;
     }
@@ -130,7 +131,13 @@ void cache_snoop(Cache *cache, Bus *bus) {
 
             // MODIFIED: Flush data to requester
             if (entry->state == MESI_MODIFIED) {
+                // --- ADD THIS BLOCK ---
+                if (bus->bus_cmd == BUS_CMD_READ) {
+                    bus->bus_shared = true; // <--- CRITICAL: Tell Core 3 "I have this too"
+                }
+                // ----------------------
                 cache->is_flushing = true;
+                bus->busy = true; // <--- ADD THIS! Locks bus for next cycle
                 cache->flush_addr = addr & ~0x7;
 
                 // --- FIX: Start at -1 to create exactly 1 cycle of latency ---

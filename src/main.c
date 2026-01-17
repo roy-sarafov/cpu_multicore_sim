@@ -130,24 +130,32 @@ int main(int argc, char *argv[]) {
             bus.busy = false;
         }
 
-        // --- D. Memory Response ---
-        // Memory listens to bus commands and responds (or drives bus if it won grant)
-        memory_listen(&main_memory, &bus);
-
-        // --- E. Snooping ---
-        // All caches see the bus signals and update MESI states
-        for (int i = 0; i < NUM_CORES; i++) {
-            cache_snoop(&cores[i].l1_cache, &bus);
+        // --- D & E. Dynamic Memory/Cache Ordering ---
+        // If Memory has the grant, it is driving the bus (sending data).
+        // It must run FIRST so caches can see the data.
+        if (bus.current_grant == 4) {
+            memory_listen(&main_memory, &bus);
+            for (int i = 0; i < NUM_CORES; i++) {
+                cache_snoop(&cores[i].l1_cache, &bus);
+            }
         }
+        // Otherwise (Core driving or Cache hijacking), Caches must run FIRST
+        // to handle snooping and potentially override the bus with a Flush.
+        else {
+            for (int i = 0; i < NUM_CORES; i++) {
+                cache_snoop(&cores[i].l1_cache, &bus);
+            }
+            memory_listen(&main_memory, &bus);
+        }
+
+
 
         // --- NEW: Latch the Shared Signal ---
         // If a Read transaction just happened, the requester needs to know
         // if anyone else had the data (to decide Exclusive vs Shared).
-        if (bus.bus_cmd == BUS_CMD_READ) {
-            // The originator of the request saves the result
-            if (bus.bus_origid < 4) {
-                cores[bus.bus_origid].l1_cache.snoop_result_shared = bus.bus_shared;
-            }
+        // New Version: Trust the wire. If shared is high, latch it.
+        if (bus.bus_shared && bus.bus_origid < 4) {
+            cores[bus.bus_origid].l1_cache.snoop_result_shared = true;
         }
 
         // --- G. Bus Trace ---
