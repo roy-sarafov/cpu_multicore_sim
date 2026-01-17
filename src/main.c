@@ -93,25 +93,13 @@ int main(int argc, char *argv[]) {
     bool active = true;
 
     while (active) {
-
         // --- F. Core Execution ---
         bool all_halted = true;
         for (int i = 0; i < NUM_CORES; i++) {
-            // IF ALREADY HALTED, SKIP EVERYTHING (Logic & Trace)
-            if (cores[i].halted) {
-                continue;
-            }
-            // Log Trace
+            if (cores[i].halted) continue;
             write_core_trace(trace_files[i], &cores[i], cycle);
-            // call cycle
             core_cycle(&cores[i], &bus);
-
-
-
-
-            if (!cores[i].halted) {
-                all_halted = false;
-            }
+            if (!cores[i].halted) all_halted = false;
         }
 
         // --- A. Start of Cycle ---
@@ -122,40 +110,39 @@ int main(int argc, char *argv[]) {
         gather_bus_requests(cores, &main_memory, requests);
         bus_arbitrate(&bus, requests);
 
-        // --- C. Drive Bus ---
-        if (bus.current_grant < 4 && bus.current_grant >= 0) {
-            drive_bus_from_core(&cores[bus.current_grant], &bus);
-
-            // ADD THIS: Release the bus wires immediately after command is sent
-            bus.busy = false;
+        // --- C. Drive Bus (PRE-CHECK FOR FLUSH) ---
+        // We must check if a cache is hijacking the bus BEFORE we let the grantee drive.
+        bool any_hijack = false;
+        for (int i=0; i<NUM_CORES; i++) {
+             if (cores[i].l1_cache.is_flushing) any_hijack = true;
         }
 
-        // --- D & E. Dynamic Memory/Cache Ordering ---
-        // If Memory has the grant, it is driving the bus (sending data).
-        // It must run FIRST so caches can see the data.
+        if (!any_hijack && bus.current_grant < 4 && bus.current_grant >= 0) {
+            drive_bus_from_core(&cores[bus.current_grant], &bus);
+            bus.busy = false; // Release immediately for normal reads
+        }
+
+        // --- D & E. Dynamic Ordering ---
+        // If Memory has grant, it runs first (Data Fill).
+        // Otherwise, Caches run first (to allow Snoop Hijack/Flush).
         if (bus.current_grant == 4) {
             memory_listen(&main_memory, &bus);
             for (int i = 0; i < NUM_CORES; i++) {
                 cache_snoop(&cores[i].l1_cache, &bus);
             }
-        }
-        // Otherwise (Core driving or Cache hijacking), Caches must run FIRST
-        // to handle snooping and potentially override the bus with a Flush.
-        else {
+        } else {
+            // Caches snoop first. If one detects a hit, it sets is_flushing=true
+            // and immediately drives the bus (overriding the empty bus).
             for (int i = 0; i < NUM_CORES; i++) {
                 cache_snoop(&cores[i].l1_cache, &bus);
             }
             memory_listen(&main_memory, &bus);
         }
 
-
-
         // --- NEW: Latch the Shared Signal ---
-        // If a Read transaction just happened, the requester needs to know
-        // if anyone else had the data (to decide Exclusive vs Shared).
-        // New Version: Trust the wire. If shared is high, latch it.
+        // Trust the wire. If shared is high, latch it.
         if (bus.bus_shared && bus.bus_origid < 4) {
-            cores[bus.bus_origid].l1_cache.snoop_result_shared = true;
+             cores[bus.bus_origid].l1_cache.snoop_result_shared = true;
         }
 
         // --- G. Bus Trace ---
@@ -164,16 +151,10 @@ int main(int argc, char *argv[]) {
         }
 
         // --- H. End of Cycle Checks ---
-        if (all_halted) {
-            active = false;
-        }
+        if (all_halted) active = false;
 
         cycle++;
-        // Safety Break (optional)
-        if (cycle > 500000) {
-            printf("Timeout: Exceeded 500,000 cycles. Infinite loop?\n");
-            break;
-        }
+        if (cycle > 500000) break;
     }
 
     // 5. Cleanup and Dump Files

@@ -22,9 +22,9 @@ void cache_init(Cache *cache, int core_id) {
 }
 
 bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
-    uint32_t set = (addr >> 3) & 0x3F; // Bits 8:3
-    uint32_t tag = addr >> 9;          // Bits 20:9
-    uint32_t offset = addr & 0x7;      // Bits 2:0
+    uint32_t set = (addr >> 3) & 0x3F;
+    uint32_t tag = addr >> 9;
+    uint32_t offset = addr & 0x7;
 
     TSRAM_Entry *entry = &cache->tsram[set];
 
@@ -32,18 +32,22 @@ bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
     if (entry->state != MESI_INVALID && entry->tag == tag) {
         cache->read_hits++;
         *data = cache->dsram[set][offset];
-        return true; // Hit
+        return true;
     }
 
     // Miss
-    cache->read_miss++;
-    cache->waiting_for_write = false;
+    // FIX: Only count the miss ONCE.
+    if (!cache->is_waiting_for_fill) {
+        cache->read_miss++;
+        cache->waiting_for_write = false;
 
-    // --- SNOOP FILTER SETUP ---
-    cache->is_waiting_for_fill = true;
-    cache->pending_addr = addr;
+        // Setup Miss
+        cache->is_waiting_for_fill = true;
+        cache->pending_addr = addr;
+        cache->snoop_result_shared = false; // Reset shared status
+    }
 
-    return false; // Stall (Core will request bus)
+    return false; // Stall
 }
 
 bool cache_write(Cache *cache, uint32_t addr, uint32_t data, Bus *bus) {
@@ -69,13 +73,18 @@ bool cache_write(Cache *cache, uint32_t addr, uint32_t data, Bus *bus) {
 
     // Miss (or Shared upgrade needed)
     if (!cache->waiting_for_write) {
-         cache->write_miss++;
+        // FIX: Only count the miss ONCE
+        if (!cache->is_waiting_for_fill) {
+            cache->write_miss++;
+        }
     }
     cache->waiting_for_write = true;
 
-    // --- SNOOP FILTER SETUP ---
-    cache->is_waiting_for_fill = true;
-    cache->pending_addr = addr;
+    // Check again to avoid resetting pending_addr during the stall loop
+    if (!cache->is_waiting_for_fill) {
+        cache->is_waiting_for_fill = true;
+        cache->pending_addr = addr;
+    }
 
     return false;
 }
@@ -115,6 +124,7 @@ void cache_snoop(Cache *cache, Bus *bus) {
 
     // 2. STANDARD SNOOPING: Listen to the bus for Requests
     if (bus->bus_cmd == BUS_CMD_READ || bus->bus_cmd == BUS_CMD_READX) {
+        if (bus->bus_origid == cache->core_id) return;
         uint32_t addr = bus->bus_addr;
         uint32_t set = (addr >> 3) & 0x3F;
         uint32_t tag = addr >> 9;
