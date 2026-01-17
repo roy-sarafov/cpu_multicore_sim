@@ -137,13 +137,14 @@ void cache_snoop(Cache *cache, Bus *bus) {
         uint32_t set = (cache->flush_addr >> 3) & 0x3F;
         bus->bus_data = cache->dsram[set][cache->flush_offset];
 
+        // *** THIS IS WHERE SHARED BECOMES 1 (During the Flush) ***
         bus->bus_shared = true;
         bus->bus_origid = cache->core_id;
 
         cache->flush_offset++;
         if (cache->flush_offset >= 8) {
             cache->is_flushing = false;
-            bus->busy = false; // <--- ADD THIS LINE to unlock the bus!
+            bus->busy = false; // Unlock the bus!
         }
         return;
     }
@@ -160,25 +161,25 @@ void cache_snoop(Cache *cache, Bus *bus) {
         // Check for Tag Match and Valid State
         if (entry->tag == tag && entry->state != MESI_INVALID) {
 
-            // "Set to 1 when answering a BusRd transaction"
-            if (bus->bus_cmd == BUS_CMD_READ) {
+            // Rule: Only assert Shared immediately if we are NOT flushing.
+            // (If we are SHARED or EXCLUSIVE, we say "I have it" now).
+            if (bus->bus_cmd == BUS_CMD_READ && entry->state != MESI_MODIFIED) {
                 bus->bus_shared = true;
             }
 
             // MODIFIED: Flush data to requester
             if (entry->state == MESI_MODIFIED) {
-                // --- ADD THIS BLOCK ---
-                if (bus->bus_cmd == BUS_CMD_READ) {
-                    bus->bus_shared = true; // <--- CRITICAL: Tell Core 3 "I have this too"
-                }
-                // ----------------------
+
+                // *** DELETE THE BLOCK THAT WAS HERE ***
+                // We do NOT set bus_shared = true here.
+                // We wait for the flush cycle (Section 1 above) to do it.
+
                 cache->is_flushing = true;
-                bus->busy = true; // <--- ADD THIS! Locks bus for next cycle
+                bus->busy = true; // Locks bus for next cycle
                 cache->flush_addr = addr & ~0x7;
 
-
+                // Start flush immediately next cycle (Cycle 1606)
                 cache->flush_offset = 0;
-                // -------------------------------------------------------------
 
                 // Update state immediately
                 if (bus->bus_cmd == BUS_CMD_READ) {
@@ -206,6 +207,12 @@ void cache_snoop(Cache *cache, Bus *bus) {
 
     // 3. CACHE FILL: Accepting Data from Bus
     if (bus->bus_cmd == BUS_CMD_FLUSH) {
+
+        // *** CATCH THE SHARED SIGNAL HERE ***
+        // Since we suppressed it during the request, the requester learns it here.
+        if (bus->bus_shared) {
+            cache->snoop_result_shared = true;
+        }
 
         // SNOOP FILTER
         bool is_my_data = cache->is_waiting_for_fill &&

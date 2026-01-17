@@ -125,8 +125,22 @@ int main(int argc, char *argv[]) {
         }
 
         // --- Latch Shared Signal ---
-        if (bus.bus_shared && bus.bus_origid < 4) {
-             cores[bus.bus_origid].l1_cache.snoop_result_shared = true;
+        if (bus.bus_shared) {
+            // 1. If it's a normal request, update the originator (Standard Logic)
+            if (bus.bus_origid < 4) {
+                cores[bus.bus_origid].l1_cache.snoop_result_shared = true;
+            }
+
+            // 2. NEW: If this is a FLUSH, the "waiting" core also needs to know it's shared!
+            if (bus.bus_cmd == BUS_CMD_FLUSH) {
+                for (int i = 0; i < NUM_CORES; i++) {
+                    // If Core i is waiting for this exact address, tell it "Shared=true"
+                    if (cores[i].l1_cache.is_waiting_for_fill &&
+                       (cores[i].l1_cache.pending_addr & ~0x7) == (bus.bus_addr & ~0x7)) {
+                        cores[i].l1_cache.snoop_result_shared = true;
+                       }
+                }
+            }
         }
 
         // --- G. Bus Trace ---
