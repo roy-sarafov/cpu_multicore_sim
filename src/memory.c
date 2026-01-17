@@ -46,7 +46,7 @@ void memory_listen(MainMemory *mem, Bus *bus) {
         if (!mem->processing_read) {
             mem->processing_read = true;
             target_addr = bus->bus_addr;
-            latency_timer = 16; // "First word... latency of 16 clock cycles"
+            latency_timer = 15; // "First word... latency of 16 clock cycles"
             word_offset = 0;
         }
     }

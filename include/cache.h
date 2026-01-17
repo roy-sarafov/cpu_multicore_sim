@@ -36,6 +36,8 @@ typedef struct {
     bool is_flushing;       // Are we currently sending data to the bus?
     uint32_t flush_addr;    // The address we are flushing
     int flush_offset;       // Current word offset (0-7) being flushed
+    // ADD THIS:
+    int sram_check_countdown;
 } Cache;
 
 void cache_init(Cache *cache, int core_id);

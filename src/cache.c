@@ -19,6 +19,7 @@ void cache_init(Cache *cache, int core_id) {
     cache->is_flushing = false;
     cache->flush_addr = 0;
     cache->flush_offset = 0;
+    cache->sram_check_countdown = 0; // Initialize to 0
 }
 
 bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
@@ -30,31 +31,38 @@ bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
 
     // Check for Hit
     if (entry->state != MESI_INVALID && entry->tag == tag) {
-        // FIX: Check if this is a resolved miss (Address matches pending)
         if (cache->pending_addr == addr) {
-            // This is the retry of the instruction that missed.
-            // Do NOT increment hit.
-            // Clear pending_addr so future accesses to this line count as hits.
             cache->pending_addr = 0xFFFFFFFF;
         } else {
-            // Real hit
             cache->read_hits++;
         }
-
         *data = cache->dsram[set][offset];
+
+        // RESET COUNTDOWN ON SUCCESS
+        cache->sram_check_countdown = 0;
         return true;
     }
 
-    // Miss
-    // Prevent counting the miss multiple times during the stall
+    // Miss Handling
     if (!cache->is_waiting_for_fill) {
+
+        // --- ADD THIS BLOCK ---
+        // If this is the first time we see the miss, just stall.
+        // Do NOT set is_waiting_for_fill yet.
+        if (cache->sram_check_countdown == 0) {
+            cache->sram_check_countdown = 1;
+            return false; // Stall
+        }
+        // ----------------------
+
         cache->read_miss++;
         cache->waiting_for_write = false;
-
-        // Setup Miss
         cache->is_waiting_for_fill = true;
         cache->pending_addr = addr;
         cache->snoop_result_shared = false;
+
+        // Reset countdown for the next instruction
+        cache->sram_check_countdown = 0;
     }
 
     return false; // Stall
@@ -70,27 +78,35 @@ bool cache_write(Cache *cache, uint32_t addr, uint32_t data, Bus *bus) {
     bool write_hit = (entry->state == MESI_MODIFIED || entry->state == MESI_EXCLUSIVE) && (entry->tag == tag);
 
     if (write_hit) {
-        // FIX: Check if this is a resolved miss
         if (cache->pending_addr == addr) {
             cache->pending_addr = 0xFFFFFFFF;
         } else {
             cache->write_hits++;
         }
-
         cache->dsram[set][offset] = data;
         entry->state = MESI_MODIFIED;
+
+        // RESET COUNTDOWN ON SUCCESS
+        cache->sram_check_countdown = 0;
         return true;
     }
 
     // Miss (or Shared upgrade needed)
     if (!cache->waiting_for_write) {
+
+        // --- ADD THIS BLOCK ---
+        if (cache->sram_check_countdown == 0) {
+            cache->sram_check_countdown = 1;
+            return false; // Stall core, verify tag
+        }
+        // ----------------------
+
         if (!cache->is_waiting_for_fill) {
             cache->write_miss++;
+            cache->sram_check_countdown = 0; // Reset
         }
     }
     cache->waiting_for_write = true;
-
-    // Setup Miss logic
     if (!cache->is_waiting_for_fill) {
         cache->is_waiting_for_fill = true;
         cache->pending_addr = addr;
@@ -160,8 +176,8 @@ void cache_snoop(Cache *cache, Bus *bus) {
                 bus->busy = true; // <--- ADD THIS! Locks bus for next cycle
                 cache->flush_addr = addr & ~0x7;
 
-                // --- FIX: Start at -1 to create exactly 1 cycle of latency ---
-                cache->flush_offset = -1;
+
+                cache->flush_offset = 0;
                 // -------------------------------------------------------------
 
                 // Update state immediately

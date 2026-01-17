@@ -21,9 +21,10 @@ void gather_bus_requests(Core cores[], MainMemory *mem, bool requests[5]) {
         return; // EXIT EARLY: Cores are blocked!
     }
 
-    // Normal Logic (Same as before)
     for (int i = 0; i < NUM_CORES; i++) {
-        if (cores[i].stall && cores[i].ex_mem.valid) {
+        // ADD check for is_waiting_for_fill
+        // This ensures we only request the bus AFTER the countdown is finished
+        if (cores[i].stall && cores[i].ex_mem.valid && cores[i].l1_cache.is_waiting_for_fill) {
             Opcode op = cores[i].ex_mem.Op;
             if (op == OP_LW || op == OP_SW) {
                 requests[i] = true;
