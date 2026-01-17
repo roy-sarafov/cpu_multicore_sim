@@ -93,54 +93,37 @@ int main(int argc, char *argv[]) {
     bool active = true;
 
     while (active) {
-        // --- F. Core Execution ---
-        bool all_halted = true;
-        for (int i = 0; i < NUM_CORES; i++) {
-            if (cores[i].halted) continue;
-            write_core_trace(trace_files[i], &cores[i], cycle);
-            core_cycle(&cores[i], &bus);
-            if (!cores[i].halted) all_halted = false;
-        }
-
         // --- A. Start of Cycle ---
         bus_reset_signals(&bus);
 
         // --- B. Arbitration ---
+        // Now checks requests generated in the PREVIOUS cycle
         bool requests[5];
         gather_bus_requests(cores, &main_memory, requests);
         bus_arbitrate(&bus, requests);
 
-        // --- C. Drive Bus (PRE-CHECK FOR FLUSH) ---
-        // We must check if a cache is hijacking the bus BEFORE we let the grantee drive.
+        // --- C. Drive Bus ---
+        // ... (Your existing bus drive logic) ...
         bool any_hijack = false;
         for (int i=0; i<NUM_CORES; i++) {
              if (cores[i].l1_cache.is_flushing) any_hijack = true;
         }
-
         if (!any_hijack && bus.current_grant < 4 && bus.current_grant >= 0) {
             drive_bus_from_core(&cores[bus.current_grant], &bus);
-            bus.busy = false; // Release immediately for normal reads
+            bus.busy = false;
         }
 
-        // --- D & E. Dynamic Ordering ---
-        // If Memory has grant, it runs first (Data Fill).
-        // Otherwise, Caches run first (to allow Snoop Hijack/Flush).
+        // --- D & E. Memory/Cache Response (Dynamic Ordering) ---
+        // ... (Your existing Snoop/Memory logic) ...
         if (bus.current_grant == 4) {
             memory_listen(&main_memory, &bus);
-            for (int i = 0; i < NUM_CORES; i++) {
-                cache_snoop(&cores[i].l1_cache, &bus);
-            }
+            for (int i = 0; i < NUM_CORES; i++) cache_snoop(&cores[i].l1_cache, &bus);
         } else {
-            // Caches snoop first. If one detects a hit, it sets is_flushing=true
-            // and immediately drives the bus (overriding the empty bus).
-            for (int i = 0; i < NUM_CORES; i++) {
-                cache_snoop(&cores[i].l1_cache, &bus);
-            }
+            for (int i = 0; i < NUM_CORES; i++) cache_snoop(&cores[i].l1_cache, &bus);
             memory_listen(&main_memory, &bus);
         }
 
-        // --- NEW: Latch the Shared Signal ---
-        // Trust the wire. If shared is high, latch it.
+        // --- Latch Shared Signal ---
         if (bus.bus_shared && bus.bus_origid < 4) {
              cores[bus.bus_origid].l1_cache.snoop_result_shared = true;
         }
@@ -148,6 +131,23 @@ int main(int argc, char *argv[]) {
         // --- G. Bus Trace ---
         if (bus_trace_file) {
             write_bus_trace(bus_trace_file, &bus, cycle);
+        }
+
+        // -----------------------------------------------------
+        // MOVED TO END: Core Execution
+        // -----------------------------------------------------
+        // 1. Print Trace (Current State before execution changes it)
+        // 2. Run Cycle (Generate Next State / Detect Misses)
+        bool all_halted = true;
+        for (int i = 0; i < NUM_CORES; i++) {
+            if (cores[i].halted) continue;
+
+            // Note: We write trace here so it captures the state *at the start* of the cycle
+            write_core_trace(trace_files[i], &cores[i], cycle);
+
+            core_cycle(&cores[i], &bus); // If miss happens here, Arbiter sees it NEXT loop
+
+            if (!cores[i].halted) all_halted = false;
         }
 
         // --- H. End of Cycle Checks ---
