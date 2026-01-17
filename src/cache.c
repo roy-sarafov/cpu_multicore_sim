@@ -15,7 +15,7 @@ void cache_init(Cache *cache, int core_id) {
 
     // Snoop Filter / Latency Init
     cache->is_waiting_for_fill = false;
-    cache->pending_addr = 0;
+    cache->pending_addr = 0xFFFFFFFF;
     cache->is_flushing = false;
     cache->flush_addr = 0;
     cache->flush_offset = 0;
@@ -30,13 +30,23 @@ bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
 
     // Check for Hit
     if (entry->state != MESI_INVALID && entry->tag == tag) {
-        cache->read_hits++;
+        // FIX: Check if this is a resolved miss (Address matches pending)
+        if (cache->pending_addr == addr) {
+            // This is the retry of the instruction that missed.
+            // Do NOT increment hit.
+            // Clear pending_addr so future accesses to this line count as hits.
+            cache->pending_addr = 0xFFFFFFFF;
+        } else {
+            // Real hit
+            cache->read_hits++;
+        }
+
         *data = cache->dsram[set][offset];
         return true;
     }
 
     // Miss
-    // FIX: Only count the miss ONCE.
+    // Prevent counting the miss multiple times during the stall
     if (!cache->is_waiting_for_fill) {
         cache->read_miss++;
         cache->waiting_for_write = false;
@@ -44,7 +54,7 @@ bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
         // Setup Miss
         cache->is_waiting_for_fill = true;
         cache->pending_addr = addr;
-        cache->snoop_result_shared = false; // Reset shared status
+        cache->snoop_result_shared = false;
     }
 
     return false; // Stall
@@ -57,30 +67,30 @@ bool cache_write(Cache *cache, uint32_t addr, uint32_t data, Bus *bus) {
 
     TSRAM_Entry *entry = &cache->tsram[set];
 
-    // Check for Hit (Must be Modified or Exclusive to write without bus activity)
-    // Actually, in Write-Back/Write-Allocate:
-    // If S -> We need BusRdX (Upgrade) -> Treat as Miss behavior logic handled by Core/Bus
-    // If M or E -> We can write immediately.
-
     bool write_hit = (entry->state == MESI_MODIFIED || entry->state == MESI_EXCLUSIVE) && (entry->tag == tag);
 
     if (write_hit) {
-        cache->write_hits++;
+        // FIX: Check if this is a resolved miss
+        if (cache->pending_addr == addr) {
+            cache->pending_addr = 0xFFFFFFFF;
+        } else {
+            cache->write_hits++;
+        }
+
         cache->dsram[set][offset] = data;
-        entry->state = MESI_MODIFIED; // Transition E -> M
+        entry->state = MESI_MODIFIED;
         return true;
     }
 
     // Miss (or Shared upgrade needed)
     if (!cache->waiting_for_write) {
-        // FIX: Only count the miss ONCE
         if (!cache->is_waiting_for_fill) {
             cache->write_miss++;
         }
     }
     cache->waiting_for_write = true;
 
-    // Check again to avoid resetting pending_addr during the stall loop
+    // Setup Miss logic
     if (!cache->is_waiting_for_fill) {
         cache->is_waiting_for_fill = true;
         cache->pending_addr = addr;

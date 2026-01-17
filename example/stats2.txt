@@ -1,7 +1,7 @@
 cycles 1193
 instructions 508
-read_hit 102
-write_hit 102
+read_hit 100
+write_hit 101
 read_miss 2
 write_miss 1
 decode_stall 606
