@@ -34,6 +34,7 @@ void memory_listen(MainMemory *mem, Bus *bus) {
             target_addr = bus->bus_addr;
             latency_timer = 15;
             word_offset = 0;
+            mem->serving_shared_request = bus->bus_shared;
         }
     }
 
@@ -49,6 +50,9 @@ void memory_listen(MainMemory *mem, Bus *bus) {
                 bus->bus_cmd = BUS_CMD_FLUSH;
                 bus->bus_addr = current_addr;
                 bus->bus_data = mem->data[current_addr];
+                if (mem->serving_shared_request) {
+                    bus->bus_shared = true;
+                }
 
                 word_offset++;
 
