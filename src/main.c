@@ -10,43 +10,51 @@
 void gather_bus_requests(Core cores[], MainMemory *mem, bool requests[5]) {
     for (int i = 0; i < 5; i++) requests[i] = false;
 
-    if (mem->processing_read) {
+    if (mem->processing_read) { 
         requests[4] = true;
-        return;
+        return; 
     }
 
     for (int i = 0; i < NUM_CORES; i++) {
-        if (cores[i].stall && cores[i].ex_mem.valid && cores[i].l1_cache.is_waiting_for_fill) {
-            Opcode op = cores[i].ex_mem.Op;
-            if (op == OP_LW || op == OP_SW) {
-                requests[i] = true;
-            }
+        
+        
+        bool needs_bus = cores[i].stall && 
+                         cores[i].ex_mem.valid &&
+                         cores[i].l1_cache.pending_addr != 0xFFFFFFFF && 
+                         !cores[i].l1_cache.is_waiting_for_fill;
+
+        if (needs_bus) {
+            requests[i] = true;
         }
     }
 }
+
 
 void drive_bus_from_core(Core *core, Bus *bus) {
     if (bus->current_grant != core->id) return;
 
     EX_MEM_Latch *latch = &core->ex_mem;
-
     if (!latch->valid) return;
 
     bus->bus_origid = core->id;
-    bus->bus_addr = latch->ALUOutput;
+    bus->bus_addr = latch->ALUOutput; 
 
     if (latch->Op == OP_LW) {
         bus->bus_cmd = BUS_CMD_READ;
     } else if (latch->Op == OP_SW) {
         bus->bus_cmd = BUS_CMD_READX;
     }
+
+    
+    
+    
+    core->l1_cache.is_waiting_for_fill = true;
 }
 
 int main(int argc, char *argv[]) {
+    
     SimFiles files;
-    if (!parse_arguments(argc, argv, &files)) {
-        return 1;
-    }
+    if (!parse_arguments(argc, argv, &files)) return 1;
 
     Bus bus;
     bus_init(&bus);
@@ -62,34 +70,37 @@ int main(int argc, char *argv[]) {
 
     FILE *trace_files[NUM_CORES];
     FILE *bus_trace_file = fopen(files.bustrace_path, "w");
-
     for (int i = 0; i < NUM_CORES; i++) {
         trace_files[i] = fopen(files.coretrace_paths[i], "w");
-        if (!trace_files[i]) {
-            printf("Error opening trace file for core %d\n", i);
-            return 1;
-        }
     }
 
     int cycle = 0;
     bool active = true;
 
     while (active) {
+        
         bus_reset_signals(&bus);
 
+        
         bool requests[5];
         gather_bus_requests(cores, &main_memory, requests);
         bus_arbitrate(&bus, requests);
 
+        
         bool any_hijack = false;
         for (int i=0; i<NUM_CORES; i++) {
              if (cores[i].l1_cache.is_flushing) any_hijack = true;
         }
+        
+        
         if (!any_hijack && bus.current_grant < 4 && bus.current_grant >= 0) {
             drive_bus_from_core(&cores[bus.current_grant], &bus);
-            bus.busy = false;
+            bus.busy = false; 
         }
 
+        
+        
+        
         if (bus.current_grant == 4) {
             memory_listen(&main_memory, &bus);
             for (int i = 0; i < NUM_CORES; i++) cache_snoop(&cores[i].l1_cache, &bus);
@@ -102,7 +113,6 @@ int main(int argc, char *argv[]) {
             if (bus.bus_origid < 4) {
                 cores[bus.bus_origid].l1_cache.snoop_result_shared = true;
             }
-
             if (bus.bus_cmd == BUS_CMD_FLUSH) {
                 for (int i = 0; i < NUM_CORES; i++) {
                     if (cores[i].l1_cache.is_waiting_for_fill &&
@@ -120,16 +130,12 @@ int main(int argc, char *argv[]) {
         bool all_halted = true;
         for (int i = 0; i < NUM_CORES; i++) {
             if (cores[i].halted) continue;
-
             write_core_trace(trace_files[i], &cores[i], cycle);
-
-            core_cycle(&cores[i], &bus);
-
+            core_cycle(&cores[i], &bus); 
             if (!cores[i].halted) all_halted = false;
         }
 
         if (all_halted) active = false;
-
         cycle++;
         if (cycle > 500000) break;
     }
@@ -140,9 +146,7 @@ int main(int argc, char *argv[]) {
     write_stats_files(cores, &files);
     write_memout_file(&main_memory, &files);
 
-    for (int i = 0; i < NUM_CORES; i++) {
-        if (trace_files[i]) fclose(trace_files[i]);
-    }
+    for (int i = 0; i < NUM_CORES; i++) if (trace_files[i]) fclose(trace_files[i]);
     if (bus_trace_file) fclose(bus_trace_file);
 
     printf("Simulation completed successfully in %d cycles.\n", cycle);

@@ -3,7 +3,7 @@
 
 void bus_init(Bus *bus) {
     memset(bus, 0, sizeof(Bus));
-    bus->arbitration_rr_index = 0;
+    bus->arbitration_rr_index = 4;
 }
 
 void bus_reset_signals(Bus *bus) {
