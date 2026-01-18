@@ -1,3 +1,16 @@
+/*
+ * Project: Multi-Core Cache Simulator (MIPS-like)
+ * File:    core.c
+ * Author:
+ * ID:
+ * Date:    11/11/2024
+ *
+ * Description:
+ * Implements the 5-stage MIPS pipeline (Fetch, Decode, Execute, Memory, WriteBack).
+ * Handles hazard detection, stalling, forwarding (conceptually), and interfacing
+ * with the L1 cache.
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -37,6 +50,11 @@ void core_init(Core *core, int id, const char *imem_path) {
 }
 
 void stage_wb(Core *core) {
+    /*
+     * 1. HAZARD CLEARING
+     * Reset the hazard tracker at the start of the cycle.
+     * This clears the flag from the previous cycle so we don't stall unnecessarily.
+     */
     core->wb_hazard_rd = 0;
 
     if (core->stall) return;
@@ -45,11 +63,20 @@ void stage_wb(Core *core) {
     MEM_WB_Latch *in = &core->mem_wb;
     Opcode op = in->Op;
 
+    /*
+     * 2. HALT HANDLING
+     * If we reach WriteBack with a HALT instruction, the core stops.
+     */
     if (op == OP_HALT) {
         core->halted = true;
         return;
     }
 
+    /*
+     * 3. WRITE ENABLE LOGIC
+     * Determine if this instruction SHOULD write to a register.
+     * By default, ALU ops and Loads write. Stores and Branches do NOT.
+     */
     bool write_enable = true;
 
     if (op == OP_SW ||
@@ -59,22 +86,33 @@ void stage_wb(Core *core) {
         write_enable = false;
         }
 
+    /*
+     * 4. REGISTER WRITE
+     * Perform the actual write to the register file.
+     */
     if (write_enable) {
         uint32_t dest_reg = in->Rd_Index;
         uint32_t write_data;
 
+        // A. Determine Data Source
         if (op == OP_LW) {
             write_data = in->MemData;
         } else if (op == OP_JAL) {
+            // JAL is special: It writes PC+1 to R15
             dest_reg = 15;
             write_data = in->PC + 1;
         } else {
+            // Standard ALU arithmetic (Add, Sub, etc.)
             write_data = in->ALUOutput;
         }
 
+        // B. Write to Register File (Only R2-R15 are writable)
         if (dest_reg >= 2 && dest_reg < 16) {
             core->regs[dest_reg] = write_data;
 
+            // C. Publish the Hazard
+            // We tell the Decode stage: "I am writing to this register NOW."
+            // This allows the Decode stage to stall if it tries to read this specific reg.
             core->wb_hazard_rd = dest_reg;
         }
     }
@@ -89,6 +127,12 @@ void stage_mem(Core *core, Bus *bus) {
         return;
     }
     bool mem_busy = false;
+
+    /*
+     * 1. CACHE ACCESS
+     * Attempt to read or write to the L1 Cache.
+     * If the cache returns false (miss/busy), we stall the pipeline.
+     */
     if (in->Op == OP_LW) {
         if (cache_read(&core->l1_cache, in->ALUOutput, &out->MemData, bus)) {
             mem_busy = false;
@@ -123,8 +167,13 @@ void stage_ex(Core *core) {
     if (!in->valid) return;
     out->PC = in->PC;
     out->Rd_Index = in->Rd_Index;
-    out->B = in->B;
+    out->B = in->B; // Pass Rt for Store
     out->Op = in->Op;
+
+    /*
+     * 1. ALU OPERATIONS
+     * Perform the arithmetic or logic operation based on the opcode.
+     */
     switch (in->Op) {
         case OP_ADD: out->ALUOutput = in->A + in->B; break;
         case OP_SUB: out->ALUOutput = in->A - in->B; break;
@@ -170,6 +219,12 @@ void stage_decode(Core *core) {
     uint32_t imm = GET_IMM(inst);
     uint32_t imm_sext = sign_extend(imm);
     bool hazard = false;
+
+    /*
+     * 1. HAZARD DETECTION
+     * Check if any previous stage is writing to a register we need.
+     * If so, stall (insert bubble).
+     */
     #define CHECK_HAZARD(reg_idx) \
         if (reg_idx >= 2) { \
             if (core->id_ex.valid && core->id_ex.Rd_Index == reg_idx) hazard = true; \
@@ -192,6 +247,12 @@ void stage_decode(Core *core) {
         core->stats.decode_stalls++;
         return;
     }
+
+    /*
+     * 2. BRANCH RESOLUTION
+     * Resolve branches in the Decode stage.
+     * If taken, update PC and flush Fetch stage (handled in Fetch).
+     */
     uint32_t val_rs = (rs == 1) ? imm_sext : core->regs[rs];
     uint32_t val_rt = (rt == 1) ? imm_sext : core->regs[rt];
     bool branch_taken = false;
@@ -230,6 +291,13 @@ void stage_fetch(Core *core) {
         return;
     }
     bool decode_stall = false;
+
+    /*
+     * 1. HAZARD CHECK (FETCH)
+     * Even though Decode handles hazards, Fetch needs to know if it should
+     * stop fetching new instructions to avoid overwriting the IF/ID latch
+     * if Decode is stalled.
+     */
     if (core->if_id.Instruction != 0) {
         uint32_t inst = core->if_id.Instruction;
         uint32_t rs = GET_RS(inst);
@@ -257,6 +325,12 @@ void stage_fetch(Core *core) {
     if (decode_stall) {
         return;
     }
+
+    /*
+     * 2. INSTRUCTION FETCH
+     * Fetch instruction from IMEM at current PC.
+     * Handle branch targets if a branch was taken in Decode.
+     */
     if (core->pc < 1024) {
         core->if_id.Instruction = core->instruction_memory[core->pc];
         core->if_id.PC = core->pc;

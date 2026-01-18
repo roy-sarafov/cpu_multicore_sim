@@ -4,51 +4,75 @@
 #include "global.h"
 #include "bus.h"
 
-// Structure for TSRAM entry (Tag + MESI)
+/*
+ * TSRAM Entry
+ * Represents a single entry in the Tag Static RAM.
+ */
 typedef struct {
-    uint32_t tag;   // Bits 11:0 of the entry [cite: 43]
-    MesiState state; // Bits 13:12 of the entry [cite: 43]
+    uint32_t tag;    // The tag bits of the stored address
+    MesiState state; // The MESI state of the block (Modified, Exclusive, Shared, Invalid)
 } TSRAM_Entry;
 
+/*
+ * Cache Structure
+ * Represents the L1 Cache hardware for a single core.
+ */
 typedef struct {
-    // DSRAM: Data Storage
-    // 64 sets, each containing a block of 8 words
+    // --- Storage ---
+    // Data SRAM: 64 sets, 8 words (32 bytes) per block
     uint32_t dsram[NUM_CACHE_SETS][BLOCK_SIZE];
 
-    // TSRAM: Tag and State Storage
+    // Tag SRAM: 64 entries
     TSRAM_Entry tsram[NUM_CACHE_SETS];
 
-    int core_id; // To know which core owns this cache
+    int core_id; // ID of the core owning this cache
 
-    // Statistics
+    // --- Statistics ---
     int read_hits;
     int write_hits;
     int read_miss;
     int write_miss;
 
-    // Existing Flags
-    bool waiting_for_write;   // True if the pending fill is for a Store (BusRdX)
-    bool snoop_result_shared; // Stores if the bus line was shared during our request
+    // --- Internal State Flags ---
+    bool waiting_for_write;   // True if the pending operation is a Write (Store)
+    bool snoop_result_shared; // True if another cache asserted Shared during our request
 
-    // --- NEW FIELDS FOR SNOOP FILTERING ---
-    bool is_waiting_for_fill; // <--- ADD THIS: Are we currently waiting for data from memory?
-    uint32_t pending_addr;    // <--- ADD THIS: The exact address we are waiting for.
-    bool is_flushing;       // Are we currently sending data to the bus?
-    uint32_t flush_addr;    // The address we are flushing
-    int flush_offset;       // Current word offset (0-7) being flushed
-    // ADD THIS:
-    int sram_check_countdown;
+    // --- State Machine Flags ---
+    bool is_waiting_for_fill; // True if we are waiting for data from Bus/Memory
+    uint32_t pending_addr;    // The address we are currently trying to access
+
+    bool is_flushing;         // True if we are currently flushing a block to the bus
+    uint32_t flush_addr;      // The address of the block being flushed
+    int flush_offset;         // Current word index (0-7) being flushed
+    
+    int sram_check_countdown; // Timer to simulate SRAM access latency (1 cycle)
 } Cache;
 
+/*
+ * cache_init
+ * Initializes the cache structure, clearing memory and resetting stats.
+ */
 void cache_init(Cache *cache, int core_id);
 
-// Core Interface
-// Returns true on Hit, False on Miss (and initiates Bus transaction)
+/*
+ * cache_read
+ * Attempts to read a word from the cache.
+ * Returns true if Hit, false if Miss (stall required).
+ */
 bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus);
+
+/*
+ * cache_write
+ * Attempts to write a word to the cache.
+ * Returns true if Hit (and write completed), false if Miss (stall required).
+ */
 bool cache_write(Cache *cache, uint32_t addr, uint32_t data, Bus *bus);
 
-// Bus Snooping Interface
-// Listening to other transactions on the bus to update MESI state
+/*
+ * cache_snoop
+ * Listens to the bus for transactions from other cores.
+ * Updates MESI state, asserts Shared signal, and triggers flushes if necessary.
+ */
 void cache_snoop(Cache *cache, Bus *bus);
 
-#endif // CACHE_H
+#endif

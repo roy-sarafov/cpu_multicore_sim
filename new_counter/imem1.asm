@@ -1,20 +1,64 @@
-add, $r2, $zero, $zero, 0      # $r2 = 0 (Address of the shared counter)
-add, $r3, $zero, $imm, 1       # $r3 = 1 (Core ID)
-add, $r4, $zero, $imm, 512     # $r4 = 512 (Stop condition)
-add, $r5, $zero, $imm, 3       # $r5 = 3 (Mask for Modulo 4: 00...0011)
-add, $r7, $zero, $imm, 512     # $r7 = 512 (Address 0x200 for conflict miss)
-### MAIN LOOP ###
-lw, $r6, $r2, $zero, 0         # Load counter value from memory (address 0)
-beq, $imm, $r6, $r4, 12        # If Counter ($r6) == 512 ($r4), jump to END (Line 12)
-### SYNCHRONIZATION CHECK (Round Robin) ###
-and, $r8, $r6, $r5, 0          # $r8 = Counter & 3 (Calculate Counter % 4)
-bne, $imm, $r8, $r3, 5         # If ($r8 != Core ID), jump back to line 5 (Main Loop) (Busy Wait)
-### UPDATE COUNTER ###
-add, $r6, $r6, $imm, 1         # Increment counter: $r6 = $r6 + 1
-sw, $r6, $r2, $zero, 0        # Store updated counter back to memory (address 0)
-beq, $imm, $zero, $zero, 5    # Unconditional jump back to Line 5 (Main Loop)
-### TERMINATION AND FLUSH ###
-lw, $r8, $r7, $zero, 0        # Load from addr 512 (0x200). 
-                              # Maps to Set 0 (same as addr 0) but different Tag.
-                              # Forces eviction of addr 0 (Modified) to Main Memory.
-halt, $zero, $zero, $zero, 0  # Stop the processor
+# ==============================================================================
+# Project: Multi-Core Cache Simulator (MIPS-like)
+# File:    new_counter/imem1.asm
+# Author:
+# ID:
+# Date:    11/11/2024
+#
+# Description:
+# Core 1 implementation of a shared counter update.
+# Uses modulo-based turn checking (Counter % 4 == 1).
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# REGISTER MAP
+# ------------------------------------------------------------------------------
+# $r2: Address of Shared Counter (0x0)
+# $r3: My Core ID (1)
+# $r4: Max Count (512)
+# $r5: Mask for Modulo 4 (3)
+# $r6: Current Counter Value
+# $r7: Sync Address (512)
+# $r8: Temporary result
+# ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# INITIALIZATION
+# ------------------------------------------------------------------------------
+add, $r2, $zero, $zero, 0      # R2 = 0
+add, $r3, $zero, $imm, 1       # R3 = 1 (My Core ID)
+add, $r4, $zero, $imm, 512     # R4 = 512
+add, $r5, $zero, $imm, 3       # R5 = 3
+add, $r7, $zero, $imm, 512     # R7 = 512
+
+# ------------------------------------------------------------------------------
+# MAIN LOOP
+# ------------------------------------------------------------------------------
+# PC=5: Load current counter
+lw, $r6, $r2, $zero, 0         
+
+# PC=6: Check termination
+beq, $imm, $r6, $r4, 12
+
+# PC=7: Check Turn (Counter % 4 == 1)
+and, $r8, $r6, $r5, 0
+bne, $imm, $r8, $r3, 5
+
+# ------------------------------------------------------------------------------
+# CRITICAL SECTION
+# ------------------------------------------------------------------------------
+# PC=9: Increment
+add, $r6, $r6, $imm, 1
+
+# PC=10: Store
+sw, $r6, $r2, $zero, 0
+
+# PC=11: Loop
+beq, $imm, $zero, $zero, 5
+
+# ------------------------------------------------------------------------------
+# TERMINATION
+# ------------------------------------------------------------------------------
+# PC=12: Final Sync
+lw, $r8, $r7, $zero, 0
+halt, $zero, $zero, $zero, 0

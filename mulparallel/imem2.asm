@@ -1,30 +1,58 @@
-# Matrix Multiplication - Serial (Core 0)
-# Registers:
-# $r2 = i (row)
-# $r3 = j (col)
-# $r4 = k (dot product index)
-# $r5 = Base A (0)
-# $r6 = Base B (256 = 0x100)
-# $r7 = Base C (512 = 0x200)
-# $r8 = Sum for C[i][j]
-# $r9 = Loop Limit (16)
+# ==============================================================================
+# Project: Multi-Core Cache Simulator (MIPS-like)
+# File:    mulparallel/imem2.asm
+# Author:
+# ID:
+# Date:    11/11/2024
+#
+# Description:
+# Parallel Matrix Multiplication (16x16) - Core 2.
+# Core 2 processes rows 8 to 11.
+# ==============================================================================
 
+# ------------------------------------------------------------------------------
+# REGISTER MAP
+# ------------------------------------------------------------------------------
+# $r2:  i (Row Index)
+# $r3:  j (Column Index)
+# $r4:  k (Dot Product Index)
+# $r5:  Base Address of Matrix A (0)
+# $r6:  Base Address of Matrix B (256)
+# $r7:  Base Address of Matrix C (512)
+# $r8:  Accumulator (Sum for C[i][j])
+# $r9:  Matrix Dimension (16)
+# $r15: Row Limit for this Core (12)
+# ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# INITIALIZATION
+# ------------------------------------------------------------------------------
     add $r5, $zero, $imm, 0     # Base A = 0
     add $r6, $zero, $imm, 256   # Base B = 0x100
     add $r7, $zero, $imm, 512   # Base C = 0x200
     add $r9, $zero, $imm, 16    # Size = 16
 
     add $r2, $zero, $imm, 8     # Start i = 8
-    add $r15, $zero, $imm, 12    # Stop i = 12 (exclusive)
+    add $r15, $zero, $imm, 12   # Stop i = 12 (exclusive)
+
+# ------------------------------------------------------------------------------
+# OUTER LOOP (Rows 8-11)
+# ------------------------------------------------------------------------------
 LoopI:
-    beq $r2, $r15, $imm, Done
+    beq $r2, $r15, $imm, Done   # Stop when i == 12
     add $r3, $zero, $zero, 0    # j = 0
 
+# ------------------------------------------------------------------------------
+# MIDDLE LOOP (Columns)
+# ------------------------------------------------------------------------------
 LoopJ:
     beq $r3, $r9, $imm, NextI   # if j == 16, next row
     add $r4, $zero, $zero, 0    # k = 0
     add $r8, $zero, $zero, 0    # sum = 0
 
+# ------------------------------------------------------------------------------
+# INNER LOOP (Dot Product)
+# ------------------------------------------------------------------------------
 LoopK:
     beq $r4, $r9, $imm, WriteC  # if k == 16, write result
 
@@ -47,6 +75,9 @@ LoopK:
     add $r4, $r4, $imm, 1       # k++
     beq $zero, $zero, $imm, LoopK
 
+# ------------------------------------------------------------------------------
+# WRITE RESULT
+# ------------------------------------------------------------------------------
 WriteC:
     # Calculate Addr C[i][j] = BaseC + i*16 + j
     mul $r10, $r2, $imm, 16
@@ -57,9 +88,15 @@ WriteC:
     add $r3, $r3, $imm, 1       # j++
     beq $zero, $zero, $imm, LoopJ
 
+# ------------------------------------------------------------------------------
+# NEXT ROW
+# ------------------------------------------------------------------------------
 NextI:
     add $r2, $r2, $imm, 1       # i++
     beq $zero, $zero, $imm, LoopI
 
+# ------------------------------------------------------------------------------
+# TERMINATION
+# ------------------------------------------------------------------------------
 Done:
     halt $zero, $zero, $zero, 0

@@ -1,9 +1,27 @@
+/*
+ * Project: Multi-Core Cache Simulator (MIPS-like)
+ * File:    io_handler.c
+ * Author:
+ * ID:
+ * Date:    11/11/2024
+ *
+ * Description:
+ * Handles all file I/O operations, including parsing command-line arguments,
+ * loading input files (IMEM, MemIn), and writing output files (Trace, RegOut,
+ * DSRAM, TSRAM, Stats, MemOut).
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "io_handler.h"
 
 bool parse_arguments(int argc, char *argv[], SimFiles *files) {
+    /*
+     * 1. DEFAULT ARGUMENTS
+     * If no arguments are provided, use the default filenames specified in the
+     * project requirements. This allows for easy local testing.
+     */
     if (argc < 2) {
         files->imem_paths[0] = "imem0.txt"; files->imem_paths[1] = "imem1.txt";
         files->imem_paths[2] = "imem2.txt"; files->imem_paths[3] = "imem3.txt";
@@ -23,6 +41,11 @@ bool parse_arguments(int argc, char *argv[], SimFiles *files) {
         return true;
     }
 
+    /*
+     * 2. COMMAND LINE PARSING
+     * If arguments are provided, we expect exactly 27 arguments (plus the executable name).
+     * We map them to the SimFiles struct in the specified order.
+     */
     if (argc != 28) {
         printf("Error: Expected 27 arguments, got %d\n", argc - 1);
         return false;
