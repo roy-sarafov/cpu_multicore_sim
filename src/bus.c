@@ -26,7 +26,9 @@ void bus_arbitrate(Bus *bus, bool request_vector[5]) {
         if (request_vector[candidate]) {
             bus->current_grant = candidate;
             bus->busy = true;
-            bus->arbitration_rr_index = candidate;
+            if (candidate < 4) {
+                bus->arbitration_rr_index = candidate;
+            }
             return;
         }
         candidate = (candidate + 1) % 5;
