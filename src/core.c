@@ -3,17 +3,13 @@
 #include <stdlib.h>
 #include "core.h"
 
-// --- Helper Functions ---
-
-// Sign Extension 12-bit -> 32-bit
 uint32_t sign_extend(uint32_t imm) {
-    if (imm & 0x800) { // If bit 11 is 1 (negative)
+    if (imm & 0x800) {
         return imm | 0xFFFFF000;
     }
     return imm;
 }
 
-// Extract fields from instruction
 #define GET_OPCODE(inst) ((inst >> 24) & 0xFF)
 #define GET_RD(inst)     ((inst >> 20) & 0xF)
 #define GET_RS(inst)     ((inst >> 16) & 0xF)
@@ -24,10 +20,8 @@ void core_init(Core *core, int id, const char *imem_path) {
     memset(core, 0, sizeof(Core));
     core->id = id;
 
-    // Initialize Cache
     cache_init(&core->l1_cache, id);
 
-    // Load IMEM from file
     FILE *fp = fopen(imem_path, "r");
     if (fp) {
         int i = 0;
@@ -42,11 +36,7 @@ void core_init(Core *core, int id, const char *imem_path) {
     }
 }
 
-// --- Pipeline Stages ---
-
 void stage_wb(Core *core) {
-    // 1. Reset the hazard tracker at the very start
-    // This clears the flag from the previous cycle so we don't stall unnecessarily.
     core->wb_hazard_rd = 0;
 
     if (core->stall) return;
@@ -55,14 +45,11 @@ void stage_wb(Core *core) {
     MEM_WB_Latch *in = &core->mem_wb;
     Opcode op = in->Op;
 
-    // 2. Handle HALT immediately
     if (op == OP_HALT) {
         core->halted = true;
         return;
     }
 
-    // 3. Determine if this instruction SHOULD write to a register
-    // By default, ALU ops and Loads write. Stores and Branches do NOT.
     bool write_enable = true;
 
     if (op == OP_SW ||
@@ -72,30 +59,22 @@ void stage_wb(Core *core) {
         write_enable = false;
         }
 
-    // 4. Perform the Write Back
     if (write_enable) {
         uint32_t dest_reg = in->Rd_Index;
         uint32_t write_data;
 
-        // A. Determine Data Source
         if (op == OP_LW) {
             write_data = in->MemData;
         } else if (op == OP_JAL) {
-            // JAL is special: It writes PC+1 to R15
             dest_reg = 15;
             write_data = in->PC + 1;
         } else {
-            // Standard ALU arithmetic (Add, Sub, etc.)
             write_data = in->ALUOutput;
         }
 
-        // B. Write to Register File (Only R2-R15 are writable)
         if (dest_reg >= 2 && dest_reg < 16) {
             core->regs[dest_reg] = write_data;
 
-            // C. Publish the Hazard
-            // We tell the Decode stage: "I am writing to this register NOW."
-            // This allows the Decode stage to stall if it tries to read this specific reg.
             core->wb_hazard_rd = dest_reg;
         }
     }
@@ -126,7 +105,7 @@ void stage_mem(Core *core, Bus *bus) {
         }
     }
     if (mem_busy) {
-        core->stall = true; // Signal to freeze previous stages
+        core->stall = true;
         return;
     }
     out->PC = in->PC;
@@ -144,7 +123,7 @@ void stage_ex(Core *core) {
     if (!in->valid) return;
     out->PC = in->PC;
     out->Rd_Index = in->Rd_Index;
-    out->B = in->B; // Pass Rt for Store
+    out->B = in->B;
     out->Op = in->Op;
     switch (in->Op) {
         case OP_ADD: out->ALUOutput = in->A + in->B; break;
@@ -219,7 +198,7 @@ void stage_decode(Core *core) {
     switch (op) {
         case OP_BEQ: branch_taken = (val_rs == val_rt); break;
         case OP_BNE: branch_taken = (val_rs != val_rt); break;
-        case OP_BLT: branch_taken = ((int32_t)val_rs < (int32_t)val_rt); break; // Signed? Assume yes for standard behavior
+        case OP_BLT: branch_taken = ((int32_t)val_rs < (int32_t)val_rt); break;
         case OP_BGT: branch_taken = ((int32_t)val_rs > (int32_t)val_rt); break;
         case OP_BLE: branch_taken = ((int32_t)val_rs <= (int32_t)val_rt); break;
         case OP_BGE: branch_taken = ((int32_t)val_rs >= (int32_t)val_rt); break;
@@ -245,10 +224,9 @@ void stage_decode(Core *core) {
 
 void stage_fetch(Core *core) {
     if (core->stall) return;
-    // bool is_halt_in_decode = (core->id_ex.valid && core->id_ex.Op == OP_HALT); && !is_halt_in_decode
     if (core->halt_detected ) {
-        core->if_id.Instruction = 0; // Bubble
-        core->if_id.PC = 0;          // Bubble
+        core->if_id.Instruction = 0;
+        core->if_id.PC = 0;
         return;
     }
     bool decode_stall = false;
