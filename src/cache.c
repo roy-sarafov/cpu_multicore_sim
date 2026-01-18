@@ -38,6 +38,19 @@ bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
         return true;
     }
 
+    // 2. CONFLICT EVICTION LOGIC (New)
+    // If we missed, and the CURRENT line is Modified, we must flush it first.
+    if (entry->state == MESI_MODIFIED && entry->tag != tag) {
+        if (!cache->is_flushing) {
+            // Start the flush
+            cache->is_flushing = true;
+            cache->flush_addr = (entry->tag << 9) | (set << 3);
+            cache->flush_offset = 0;
+        }
+        // Stall while flushing
+        return false;
+    }
+
     if (cache->pending_addr != addr) {
 
         if (cache->sram_check_countdown == 0) {
@@ -76,6 +89,15 @@ bool cache_write(Cache *cache, uint32_t addr, uint32_t data, Bus *bus) {
         entry->state = MESI_MODIFIED;
         cache->sram_check_countdown = 0;
         return true;
+    }
+
+    if (entry->state == MESI_MODIFIED && entry->tag != tag) {
+        if (!cache->is_flushing) {
+            cache->is_flushing = true;
+            cache->flush_addr = (entry->tag << 9) | (set << 3);
+            cache->flush_offset = 0;
+        }
+        return false;
     }
 
     if (!cache->waiting_for_write) {
@@ -119,6 +141,10 @@ void cache_snoop(Cache *cache, Bus *bus) {
         if (cache->flush_offset >= 8) {
             cache->is_flushing = false;
             bus->busy = false;
+
+            if (cache->tsram[set].state == MESI_MODIFIED) {
+                cache->tsram[set].state = MESI_INVALID;
+            }
         }
         return;
     }
