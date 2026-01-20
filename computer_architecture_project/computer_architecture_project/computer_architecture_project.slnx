@@ -3,6 +3,6 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="asm/asm.vcxproj" />
-  <Project Path="sim/sim.vcxproj" />
+  <Project Path="asm/asm.vcxproj" Id="7b54fd82-6a12-4614-90f5-66a2c00cadef" />
+  <Project Path="sim/sim.vcxproj" Id="9ccd5d56-cf71-4e10-acd1-192631090a7d" />
 </Solution>
