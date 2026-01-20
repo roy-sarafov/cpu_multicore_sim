@@ -10,5 +10,5 @@ include_directories(include)
 file(GLOB_RECURSE SOURCES "src/*.c")
 
 # Create executable
-add_executable(sim_exe ${SOURCES})
-add_executable(asm_exe assembler.c)
+add_executable(sim ${SOURCES})
+add_executable(asm assembler.c)
