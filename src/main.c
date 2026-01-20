@@ -49,6 +49,13 @@ void gather_bus_requests(Core cores[], MainMemory *mem, bool requests[5]) {
                          cores[i].l1_cache.pending_addr != 0xFFFFFFFF && 
                          !cores[i].l1_cache.is_waiting_for_fill;
 
+        // <--- ADD THIS BLOCK --->
+        // Also request bus if we need to evict dirty data
+        if (cores[i].l1_cache.eviction_pending) {
+            needs_bus = true;
+        }
+        // <----------------------->
+
         if (needs_bus) {
             requests[i] = true;
         }
@@ -58,6 +65,19 @@ void gather_bus_requests(Core cores[], MainMemory *mem, bool requests[5]) {
 
 void drive_bus_from_core(Core *core, Bus *bus) {
     if (bus->current_grant != core->id) return;
+
+    // 1. Handle Eviction Grant
+    if (core->l1_cache.eviction_pending) {
+        // Transition from "Pending" to "Active Flushing"
+        core->l1_cache.is_flushing = true;
+        core->l1_cache.eviction_pending = false;
+        core->l1_cache.flush_offset = 0;
+
+        // We don't drive the bus data here directly.
+        // Setting 'is_flushing' will cause cache_snoop (in the next phase)
+        // to drive the bus with BUS_CMD_FLUSH.
+        return;
+    }
 
     EX_MEM_Latch *latch = &core->ex_mem;
     if (!latch->valid) return;

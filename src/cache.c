@@ -31,6 +31,7 @@ void cache_init(Cache *cache, int core_id) {
     cache->flush_addr = 0;
     cache->flush_offset = 0;
     cache->sram_check_countdown = 0;
+    cache->eviction_pending = false;
 }
 
 bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
@@ -57,19 +58,17 @@ bool cache_read(Cache *cache, uint32_t addr, uint32_t *data, Bus *bus) {
     }
 
     /*
-     * 2. CONFLICT EVICTION LOGIC
-     * If we missed, and the CURRENT line is Modified, we must flush it first.
-     * This ensures we don't overwrite dirty data.
-     */
+ * 2. CONFLICT EVICTION LOGIC
+ * If we missed, and the CURRENT line is Modified, we must flush it first.
+ * We request the bus for this eviction (eviction_pending) and stall.
+ */
     if (entry->state == MESI_MODIFIED && entry->tag != tag) {
-        if (!cache->is_flushing) {
-            // Start the flush
-            cache->is_flushing = true;
+        if (!cache->eviction_pending && !cache->is_flushing) {
+            cache->eviction_pending = true; // Request arbitration
             cache->flush_addr = (entry->tag << 9) | (set << 3);
             cache->flush_offset = 0;
         }
-        // Stall while flushing
-        return false;
+        return false; // Stall core until eviction is done
     }
 
     /*
@@ -123,16 +122,17 @@ bool cache_write(Cache *cache, uint32_t addr, uint32_t data, Bus *bus) {
     }
 
     /*
-     * 2. EVICTION
-     * If the line is currently Modified but tags don't match, flush it.
-     */
+  * 2. CONFLICT EVICTION LOGIC
+  * If we missed, and the CURRENT line is Modified, we must flush it first.
+  * We request the bus for this eviction (eviction_pending) and stall.
+  */
     if (entry->state == MESI_MODIFIED && entry->tag != tag) {
-        if (!cache->is_flushing) {
-            cache->is_flushing = true;
+        if (!cache->eviction_pending && !cache->is_flushing) {
+            cache->eviction_pending = true; // Request arbitration
             cache->flush_addr = (entry->tag << 9) | (set << 3);
             cache->flush_offset = 0;
         }
-        return false;
+        return false; // Stall core until eviction is done
     }
 
     /*

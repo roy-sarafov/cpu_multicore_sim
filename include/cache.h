@@ -40,7 +40,7 @@ typedef struct {
     // --- State Machine Flags ---
     bool is_waiting_for_fill; // True if we are waiting for data from Bus/Memory
     uint32_t pending_addr;    // The address we are currently trying to access
-
+    bool eviction_pending;
     bool is_flushing;         // True if we are currently flushing a block to the bus
     uint32_t flush_addr;      // The address of the block being flushed
     int flush_offset;         // Current word index (0-7) being flushed

@@ -1,68 +1,65 @@
-# Parallel Matrix Multiplication (Core 1)
-# Rows 4 to 8
+# Core 1: Rows 4-7
 
-add $r2, $zero, $imm, 0     # Base A = 0
-add $r3, $zero, $imm, 256   # Base B = 256
-add $r4, $zero, $imm, 512   # Base C = 512
-add $r5, $zero, $imm, 4     # i = 4 (Start Row)
-add $r13, $zero, $imm, 8    # i Limit = 8 (End Row)
-add $r14, $zero, $imm, 16   # j, k Limit = 16
+add $r2, $zero, $imm, 4
+add $r12, $zero, $imm, 8
 
-Loop_I:
-	beq $imm, $r5, $r13, End_I
-	add $zero, $zero, $zero, 0      # [DELAY SLOT]
+loop_i:
+    beq $imm, $r2, $r12, flush_start
+    add $r3, $zero, $zero, 0
 
-	add $r6, $zero, $imm, 0         # j = 0
+loop_j:
+    add $r14, $zero, $imm, 16
+    beq $imm, $r3, $r14, next_i
+    add $r4, $zero, $zero, 0
+    add $r5, $zero, $zero, 0
 
-Loop_J:
-	beq $imm, $r6, $r14, End_J
-	add $zero, $zero, $zero, 0      # [DELAY SLOT]
+loop_k:
+    add $r14, $zero, $imm, 16
+    beq $imm, $r4, $r14, store_c
+    add $zero, $zero, $zero, 0
 
-	add $r8, $zero, $imm, 0         # sum = 0
-	add $r7, $zero, $imm, 0         # k = 0
+    sll $r9, $r2, $imm, 4
+    add $r9, $r9, $r4, 0
+    lw  $r9, $r9, $zero, 0
 
-Loop_K:
-	beq $imm, $r7, $r14, End_K
-	add $zero, $zero, $zero, 0      # [DELAY SLOT]
+    sll $r10, $r4, $imm, 4
+    add $r10, $r10, $r3, 0
+    add $r10, $r10, $imm, 256
+    lw  $r10, $r10, $zero, 0
 
-	# Load A[i][k]
-	sll $r9, $r5, $imm, 4
-	add $r9, $r9, $r7, 0
-	add $r9, $r9, $r2, 0
-	lw $r10, $r9, $imm, 0
+    mul $r13, $r9, $r10, 0
+    add $r5, $r5, $r13, 0
 
-	# Load B[k][j]
-	sll $r9, $r7, $imm, 4
-	add $r9, $r9, $r6, 0
-	add $r9, $r9, $r3, 0
-	lw $r11, $r9, $imm, 0
+    add $r4, $r4, $imm, 1
+    beq $imm, $zero, $zero, loop_k
+    add $zero, $zero, $zero, 0
 
-	# Multiply and Accumulate
-	mul $r12, $r10, $r11, 0
-	add $r8, $r8, $r12, 0
+store_c:
+    sll $r8, $r2, $imm, 4
+    add $r8, $r8, $r3, 0
+    add $r8, $r8, $imm, 512
+    sw  $r5, $r8, $zero, 0
 
-	# Increment k
-	add $r7, $r7, $imm, 1
-	beq $imm, $zero, $zero, Loop_K
-	add $zero, $zero, $zero, 0      # [DELAY SLOT]
+    add $r3, $r3, $imm, 1
+    beq $imm, $zero, $zero, loop_j
+    add $zero, $zero, $zero, 0
 
-End_K:
-	# Store C[i][j]
-	sll $r9, $r5, $imm, 4
-	add $r9, $r9, $r6, 0
-	add $r9, $r9, $r4, 0
-	sw $r8, $r9, $imm, 0
+next_i:
+    add $r2, $r2, $imm, 1
+    beq $imm, $zero, $zero, loop_i
+    add $zero, $zero, $zero, 0
 
-	# Increment j
-	add $r6, $r6, $imm, 1
-	beq $imm, $zero, $zero, Loop_J
-	add $zero, $zero, $zero, 0      # [DELAY SLOT]
+flush_start:
+    add $r2, $zero, $zero, 0
+    add $r12, $zero, $imm, 256
 
-End_J:
-	# Increment i
-	add $r5, $r5, $imm, 1
-	beq $imm, $zero, $zero, Loop_I
-	add $zero, $zero, $zero, 0      # [DELAY SLOT]
+flush_loop:
+    beq $imm, $r2, $r12, halt_core
+    add $zero, $zero, $zero, 0
+    lw $r0, $r2, $zero, 0
+    add $r2, $r2, $imm, 8
+    beq $imm, $zero, $zero, flush_loop
+    add $zero, $zero, $zero, 0
 
-End_I:
-	halt $zero, $zero, $zero, 0
+halt_core:
+    halt $zero, $zero, $zero, 0
