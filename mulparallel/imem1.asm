@@ -1,102 +1,68 @@
-# ==============================================================================
-# Project: Multi-Core Cache Simulator (MIPS-like)
-# File:    mulparallel/imem1.asm
-# Author:
-# ID:
-# Date:    11/11/2024
-#
-# Description:
-# Parallel Matrix Multiplication (16x16) - Core 1.
-# Core 1 processes rows 4 to 7.
-# ==============================================================================
+# Parallel Matrix Multiplication (Core 1)
+# Rows 4 to 8
 
-# ------------------------------------------------------------------------------
-# REGISTER MAP
-# ------------------------------------------------------------------------------
-# $r2:  i (Row Index)
-# $r3:  j (Column Index)
-# $r4:  k (Dot Product Index)
-# $r5:  Base Address of Matrix A (0)
-# $r6:  Base Address of Matrix B (256)
-# $r7:  Base Address of Matrix C (512)
-# $r8:  Accumulator (Sum for C[i][j])
-# $r9:  Matrix Dimension (16)
-# $r15: Row Limit for this Core (8)
-# ------------------------------------------------------------------------------
+add $r2, $zero, $imm, 0     # Base A = 0
+add $r3, $zero, $imm, 256   # Base B = 256
+add $r4, $zero, $imm, 512   # Base C = 512
+add $r5, $zero, $imm, 4     # i = 4 (Start Row)
+add $r13, $zero, $imm, 8    # i Limit = 8 (End Row)
+add $r14, $zero, $imm, 16   # j, k Limit = 16
 
-# ------------------------------------------------------------------------------
-# INITIALIZATION
-# ------------------------------------------------------------------------------
-    add $r5, $zero, $imm, 0     # Base A = 0
-    add $r6, $zero, $imm, 256   # Base B = 0x100
-    add $r7, $zero, $imm, 512   # Base C = 0x200
-    add $r9, $zero, $imm, 16    # Size = 16
+Loop_I:
+	beq $imm, $r5, $r13, End_I
+	add $zero, $zero, $zero, 0      # [DELAY SLOT]
 
-    add $r2, $zero, $imm, 4     # Start i = 4
-    add $r15, $zero, $imm, 8    # Stop i = 8 (exclusive)
+	add $r6, $zero, $imm, 0         # j = 0
 
-# ------------------------------------------------------------------------------
-# OUTER LOOP (Rows 4-7)
-# ------------------------------------------------------------------------------
-LoopI:
-    beq $r2, $r15, $imm, Done   # Stop when i == 8
-    add $r3, $zero, $zero, 0    # j = 0
+Loop_J:
+	beq $imm, $r6, $r14, End_J
+	add $zero, $zero, $zero, 0      # [DELAY SLOT]
 
-# ------------------------------------------------------------------------------
-# MIDDLE LOOP (Columns)
-# ------------------------------------------------------------------------------
-LoopJ:
-    beq $r3, $r9, $imm, NextI   # if j == 16, next row
-    add $r4, $zero, $zero, 0    # k = 0
-    add $r8, $zero, $zero, 0    # sum = 0
+	add $r8, $zero, $imm, 0         # sum = 0
+	add $r7, $zero, $imm, 0         # k = 0
 
-# ------------------------------------------------------------------------------
-# INNER LOOP (Dot Product)
-# ------------------------------------------------------------------------------
-LoopK:
-    beq $r4, $r9, $imm, WriteC  # if k == 16, write result
+Loop_K:
+	beq $imm, $r7, $r14, End_K
+	add $zero, $zero, $zero, 0      # [DELAY SLOT]
 
-    # Calculate Addr A[i][k] = BaseA + i*16 + k
-    mul $r10, $r2, $imm, 16     # r10 = i * 16
-    add $r10, $r10, $r4         # r10 = i*16 + k
-    add $r10, $r10, $r5         # r10 = BaseA + offset
-    lw  $r11, $r10, $imm, 0     # r11 = A[i][k]
+	# Load A[i][k]
+	sll $r9, $r5, $imm, 4
+	add $r9, $r9, $r7, 0
+	add $r9, $r9, $r2, 0
+	lw $r10, $r9, $imm, 0
 
-    # Calculate Addr B[k][j] = BaseB + k*16 + j
-    mul $r12, $r4, $imm, 16     # r12 = k * 16
-    add $r12, $r12, $r3         # r12 = k*16 + j
-    add $r12, $r12, $r6         # r12 = BaseB + offset
-    lw  $r13, $r12, $imm, 0     # r13 = B[k][j]
+	# Load B[k][j]
+	sll $r9, $r7, $imm, 4
+	add $r9, $r9, $r6, 0
+	add $r9, $r9, $r3, 0
+	lw $r11, $r9, $imm, 0
 
-    # Multiply and Accumulate
-    mul $r14, $r11, $r13        # r14 = A * B
-    add $r8, $r8, $r14          # sum += r14
+	# Multiply and Accumulate
+	mul $r12, $r10, $r11, 0
+	add $r8, $r8, $r12, 0
 
-    add $r4, $r4, $imm, 1       # k++
-    beq $zero, $zero, $imm, LoopK
+	# Increment k
+	add $r7, $r7, $imm, 1
+	beq $imm, $zero, $zero, Loop_K
+	add $zero, $zero, $zero, 0      # [DELAY SLOT]
 
-# ------------------------------------------------------------------------------
-# WRITE RESULT
-# ------------------------------------------------------------------------------
-WriteC:
-    # Calculate Addr C[i][j] = BaseC + i*16 + j
-    mul $r10, $r2, $imm, 16
-    add $r10, $r10, $r3
-    add $r10, $r10, $r7
-    sw  $r8, $r10, $imm, 0      # C[i][j] = sum
+End_K:
+	# Store C[i][j]
+	sll $r9, $r5, $imm, 4
+	add $r9, $r9, $r6, 0
+	add $r9, $r9, $r4, 0
+	sw $r8, $r9, $imm, 0
 
-    add $r3, $r3, $imm, 1       # j++
-    beq $zero, $zero, $imm, LoopJ
+	# Increment j
+	add $r6, $r6, $imm, 1
+	beq $imm, $zero, $zero, Loop_J
+	add $zero, $zero, $zero, 0      # [DELAY SLOT]
 
-# ------------------------------------------------------------------------------
-# NEXT ROW
-# ------------------------------------------------------------------------------
-NextI:
-    add $r2, $r2, $imm, 1       # i++
-    beq $zero, $zero, $imm, LoopI
+End_J:
+	# Increment i
+	add $r5, $r5, $imm, 1
+	beq $imm, $zero, $zero, Loop_I
+	add $zero, $zero, $zero, 0      # [DELAY SLOT]
 
-# ------------------------------------------------------------------------------
-# TERMINATION
-# ------------------------------------------------------------------------------
-Done:
-    halt $zero, $zero, $zero, 0
+End_I:
+	halt $zero, $zero, $zero, 0

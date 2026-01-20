@@ -1,12 +1,2 @@
-# ==============================================================================
-# Project: Multi-Core Cache Simulator (MIPS-like)
-# File:    mulserial/imem1.asm
-# Author:
-# ID:
-# Date:    11/11/2024
-#
-# Description:
-# Core 1 is idle in the serial implementation.
-# ==============================================================================
-
+# Serial Matrix Multiplication (Core 1 - Idle)
 halt $zero, $zero, $zero, 0
