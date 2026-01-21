@@ -1,64 +1,31 @@
 # ==============================================================================
 # Project: Multi-Core Cache Simulator (MIPS-like)
-# File:    new_counter/imem2.asm
-# Author:
-# ID:
-# Date:    11/11/2024
+# File:    imem2.asm
 #
 # Description:
-# Core 2 implementation of a shared counter update.
-# Uses modulo-based turn checking (Counter % 4 == 2).
+# Implementation for Core 2. Coordinates via (Counter % 4 == 2).
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
-# REGISTER MAP
-# ------------------------------------------------------------------------------
-# $r2: Address of Shared Counter (0x0)
-# $r3: My Core ID (2)
-# $r4: Max Count (512)
-# $r5: Mask for Modulo 4 (3)
-# $r6: Current Counter Value
-# $r7: Sync Address (512)
-# $r8: Temporary result
-# ------------------------------------------------------------------------------
+# --- PHASE 1: INITIALIZATION ---
+add, $r2, $zero, $zero, 0      # Shared Counter Address
+add, $r3, $zero, $imm, 2       # My Core ID = 2
+add, $r4, $zero, $imm, 512     # Maximum count
+add, $r5, $zero, $imm, 3       # Mask for modulo 4
+add, $r7, $zero, $imm, 512     # Sync address
 
-# ------------------------------------------------------------------------------
-# INITIALIZATION
-# ------------------------------------------------------------------------------
-add, $r2, $zero, $zero, 0      # R2 = 0
-add, $r3, $zero, $imm, 2       # R3 = 2 (My Core ID)
-add, $r4, $zero, $imm, 512     # R4 = 512
-add, $r5, $zero, $imm, 3       # R5 = 3
-add, $r7, $zero, $imm, 512     # R7 = 512
+# --- PHASE 2: SPIN-LOCK ---
+lw, $r6, $r2, $zero, 0         # [PC 5] Load shared counter
+beq, $imm, $r6, $r4, 12        # [PC 6] If count == 512, exit
 
-# ------------------------------------------------------------------------------
-# MAIN LOOP
-# ------------------------------------------------------------------------------
-# PC=5: Load current counter
-lw, $r6, $r2, $zero, 0
+# Turn check: (Counter & 3) == 2?
+and, $r8, $r6, $r5, 0          # [PC 7] Calculate turn index
+bne, $imm, $r8, $r3, 5         # [PC 8] If turn is not 2, spin back to PC 5
 
-# PC=6: Check termination
-beq, $imm, $r6, $r4, 12
+# --- PHASE 3: CRITICAL SECTION ---
+add, $r6, $r6, $imm, 1         # [PC 9] Increment
+sw, $r6, $r2, $zero, 0         # [PC 10] Store result
+beq, $imm, $zero, $zero, 5     # [PC 11] Jump to loop start
 
-# PC=7: Check Turn (Counter % 4 == 2)
-and, $r8, $r6, $r5, 0
-bne, $imm, $r8, $r3, 5         
-
-# ------------------------------------------------------------------------------
-# CRITICAL SECTION
-# ------------------------------------------------------------------------------
-# PC=9: Increment
-add, $r6, $r6, $imm, 1
-
-# PC=10: Store
-sw, $r6, $r2, $zero, 0
-
-# PC=11: Loop
-beq, $imm, $zero, $zero, 5
-
-# ------------------------------------------------------------------------------
-# TERMINATION
-# ------------------------------------------------------------------------------
-# PC=12: Final Sync
-lw, $r8, $r7, $zero, 0
-halt, $zero, $zero, $zero, 0
+# --- PHASE 4: TERMINATION ---
+lw, $r8, $r7, $zero, 0         # Final sync read
+halt, $zero, $zero, $zero, 0   # Stop Core 2

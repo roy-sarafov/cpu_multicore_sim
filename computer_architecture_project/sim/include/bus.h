@@ -3,55 +3,63 @@
 
 #include "global.h"
 
-/*
- * Bus Commands
- * Defines the types of transactions that can occur on the bus.
+/**
+ * @brief Bus Command Definitions
+ * * These constants represent the command signals driven on the bus to facilitate
+ * the snooping coherence protocol (e.g., MESI/MSI).
  */
 typedef enum {
-    BUS_CMD_NO_CMD = 0, // No active command
-    BUS_CMD_READ   = 1, // BusRd: Request to read a block (Shared intent)
-    BUS_CMD_READX  = 2, // BusRdX: Request to read a block (Exclusive intent)
-    BUS_CMD_FLUSH  = 3  // Flush: Writing a block back to memory (or to another cache)
+    BUS_CMD_NO_CMD = 0, /**< No active transaction on the bus. */
+    BUS_CMD_READ = 1, /**< BusRd: Issued when a core needs a block for reading. */
+    BUS_CMD_READX = 2, /**< BusRdX: Issued when a core needs to write to a block it doesn't own exclusively. */
+    BUS_CMD_FLUSH = 3  /**< Flush: Issued when a block is being written back to main memory. */
 } BusCmd;
 
-/*
- * Bus State Structure
- * Represents the physical wires and internal state of the system bus.
+/**
+ * @brief Bus State Structure
+ * * Encapsulates the state of the shared system bus, including both the physical
+ * signal lines (wires) and the internal state required for arbitration logic.
  */
 typedef struct {
-    // --- Visible Signals (Wires) ---
-    int bus_origid;      // ID of the component driving the bus (0-3=Cores, 4=Mem)
-    BusCmd bus_cmd;      // Current command on the bus
-    uint32_t bus_addr;   // Address being accessed
-    uint32_t bus_data;   // Data being transferred (valid during Flush)
-    int bus_shared;      // Shared signal (wired-OR), asserted by snoopers
+    /* --- Visible Bus Signals (Physical Wires) --- */
 
-    // --- Internal Arbiter State ---
-    bool busy;                // True if a multi-cycle transaction is in progress
-    int current_grant;        // ID of the component currently granted bus access
-    int arbitration_rr_index; // Round-Robin pointer (last serviced agent)
-    
-    int memory_countdown;     // (Legacy/Unused) Timer for memory operations
+    int bus_origid;      /**< ID of the component currently driving the bus (0-3: Cores, 4: Main Memory). */
+    BusCmd bus_cmd;      /**< The command currently being broadcasted on the bus. */
+    uint32_t bus_addr;   /**< The memory address associated with the current bus transaction. */
+    uint32_t bus_data;   /**< The data word being transferred (primarily used during Flush operations). */
+    int bus_shared;      /**< Shared signal (wired-OR); asserted by snooping caches to indicate they hold the block. */
+
+    /* --- Internal Arbiter & Controller State --- */
+
+    bool busy;                /**< High if a multi-cycle transaction is currently occupying the bus. */
+    int current_grant;        /**< ID of the agent (0-4) currently granted permission to drive the bus. */
+    int arbitration_rr_index; /**< Round-Robin pointer tracking the last agent to successfully win arbitration. */
+
+    int memory_countdown;     /**< (Unused) Placeholder for modeling memory latency. */
 } Bus;
 
-/*
- * bus_init
- * Initializes the bus structure to default values.
+/**
+ * @brief Initializes the bus structure.
+ * * Sets all signals to zero and initializes the Round-Robin arbiter.
+ * * @param bus Pointer to the Bus structure to be initialized.
  */
-void bus_init(Bus *bus);
+void bus_init(Bus* bus);
 
-/*
- * bus_reset_signals
- * Clears the transient signals (cmd, addr, data, shared) at the start of a cycle.
- * Does NOT clear internal state like 'busy' or 'arbitration_rr_index'.
+/**
+ * @brief Resets transient bus signals.
+ * * Clears the visible signal lines (cmd, addr, data, shared) at the beginning
+ * of a clock cycle. This does not affect persistent state like 'busy' or the arbiter index.
+ * * @param bus Pointer to the Bus structure.
  */
-void bus_reset_signals(Bus *bus);
+void bus_reset_signals(Bus* bus);
 
-/*
- * bus_arbitrate
- * Performs Round-Robin arbitration to select the next bus master.
- * Updates 'current_grant' based on the 'request_vector'.
+/**
+ * @brief Performs bus arbitration logic.
+ * * Uses a Round-Robin policy to select the next bus master from the request_vector.
+ * If the bus is currently 'busy' with a transaction, the grant remains unchanged.
+ * * @param bus Pointer to the Bus structure.
+ * @param request_vector Array of booleans where index 0-3 are Cores and index 4 is Memory.
  */
-void bus_arbitrate(Bus *bus, bool request_vector[5]);
+void bus_arbitrate(Bus* bus, bool request_vector[5]);
 
 #endif

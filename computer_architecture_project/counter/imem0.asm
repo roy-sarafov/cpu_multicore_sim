@@ -1,66 +1,52 @@
 # ==============================================================================
 # Project: Multi-Core Cache Simulator (MIPS-like)
-# File:    new_counter/imem0.asm
-# Author:
-# ID:
-# Date:    11/11/2024
+# File:    imem0.asm
 #
 # Description:
-# Core 0 implementation of a shared counter update.
-# This version uses a simpler modulo-based check to determine turn.
+# Implementation for Core 0 of a shared atomic counter. 
+# This program uses a modulo-based spin-lock (Counter % 4) to coordinate 
+# access to a shared memory variable among four cores.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# REGISTER MAP
+# REGISTER ALLOCATION
 # ------------------------------------------------------------------------------
-# $r2: Address of Shared Counter (0x0)
-# $r3: My Core ID (0)
-# $r4: Max Count (512)
-# $r5: Mask for Modulo 4 (3 -> 0b11)
-# $r6: Current Counter Value (Loaded from memory)
-# $r7: Sync Address (512)
-# $r8: Temporary result of (Counter % 4)
+# $r2: Base address for the shared counter (Memory Address 0x0)
+# $r3: This core's unique identifier (Core ID = 0)
+# $r4: Target termination value (512)
+# $r5: Bitmask used to perform modulo 4 operation (Value 3 = 0b11)
+# $r6: Local register to store the counter value retrieved from memory
+# $r7: Synchronization/Barrier address (Memory Address 512)
+# $r8: Temporary register for turn-calculation results
 # ------------------------------------------------------------------------------
 
-# ------------------------------------------------------------------------------
-# INITIALIZATION
-# ------------------------------------------------------------------------------
-add, $r2, $zero, $zero, 0       # R2 = 0 (Shared Counter Address)
-add, $r3, $zero, $imm, 0        # R3 = 0 (My Core ID)
-add, $r4, $zero, $imm, 512      # R4 = 512 (Target Count)
-add, $r5, $zero, $imm, 3        # R5 = 3 (Mask for Modulo 4)
-add, $r7, $zero, $imm, 512      # R7 = 512 (Sync Address)
+# --- PHASE 1: INITIALIZATION ---
+# Setup pointers and constants required for the synchronization loop.
+add, $r2, $zero, $zero, 0       # Initialize R2 with 0 (Shared Counter Address)
+add, $r3, $zero, $imm, 0        # Set R3 to 0 (This Core's ID)
+add, $r4, $zero, $imm, 512      # Set R4 to 512 (Upper bound for counting)
+add, $r5, $zero, $imm, 3        # Set R5 to 3 (Mask used for 'Counter % 4' logic)
+add, $r7, $zero, $imm, 512      # Set R7 to 512 (Memory address for final sync)
 
-# ------------------------------------------------------------------------------
-# MAIN LOOP
-# ------------------------------------------------------------------------------
-# PC=5: Load current counter value
-lw, $r6, $r2, $zero, 0
+# --- PHASE 2: SPIN-LOCK & TURN VALIDATION ---
+# Core 0 enters a loop, continuously checking if it is its turn to increment.
+lw, $r6, $r2, $zero, 0          # [PC 5] Load current shared counter from address 0x0
 
-# PC=6: Check if counter reached max (512)
-beq, $imm, $r6, $r4, 12         # If R6 == 512, jump to End (PC=12)
+# Check if global goal is reached.
+beq, $imm, $r6, $r4, 12         # [PC 6] If counter == 512, exit to termination (PC 12)
 
-# PC=7: Check if it's my turn (Counter % 4 == CoreID)
-and, $r8, $r6, $r5, 0           # R8 = R6 & 3 (Equivalent to R6 % 4)
-bne, $imm, $r8, $r3, 5          # If (R8 != MyID), jump back to Load (PC=5)
+# Calculate turn: (Counter & 3) == MyCoreID?
+and, $r8, $r6, $r5, 0           # [PC 7] R8 = R6 & 0x3 (Calculates current turn index)
+bne, $imm, $r8, $r3, 5          # [PC 8] If turn index != 0, repeat load (Spin-lock)
 
-# ------------------------------------------------------------------------------
-# CRITICAL SECTION
-# ------------------------------------------------------------------------------
-# PC=9: Increment Counter
-add, $r6, $r6, $imm, 1
+# --- PHASE 3: CRITICAL SECTION ---
+# Only reached when (Counter % 4) == 0.
+add, $r6, $r6, $imm, 1          # [PC 9] Increment the local copy of the counter
+sw, $r6, $r2, $zero, 0          # [PC 10] Store updated value back to shared memory
 
-# PC=10: Store Counter
-sw, $r6, $r2, $zero, 0
+# Jump back to re-evaluate the loop.
+beq, $imm, $zero, $zero, 5      # [PC 11] Unconditional jump back to Load (PC 5)
 
-# PC=11: Jump back to start
-beq, $imm, $zero, $zero, 5      # Unconditional jump to PC=5
-
-# ------------------------------------------------------------------------------
-# TERMINATION
-# ------------------------------------------------------------------------------
-# PC=12: Final Sync Read
-lw, $r8, $r7, $zero, 0
-
-# PC=13: Halt
-halt, $zero, $zero, $zero, 0
+# --- PHASE 4: TERMINATION ---
+lw, $r8, $r7, $zero, 0          # [PC 12] Final dummy read from sync address 512
+halt, $zero, $zero, $zero, 0    # [PC 13] Stop Core 0 execution

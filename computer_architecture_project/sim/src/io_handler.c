@@ -1,14 +1,11 @@
 /*
  * Project: Multi-Core Cache Simulator (MIPS-like)
  * File:    io_handler.c
- * Author:
- * ID:
- * Date:    11/11/2024
- *
- * Description:
- * Handles all file I/O operations, including parsing command-line arguments,
- * loading input files (IMEM, MemIn), and writing output files (Trace, RegOut,
- * DSRAM, TSRAM, Stats, MemOut).
+ * * Description:
+ * This module manages all filesystem interactions. It is responsible for
+ * populating the simulation's initial state from input files and generating
+ * the extensive trace and state-dump files required for verifying the
+ * correctness of the multi-core execution and cache coherence protocol.
  */
 
 #include <stdio.h>
@@ -16,12 +13,13 @@
 #include <string.h>
 #include "io_handler.h"
 
-bool parse_arguments(int argc, char *argv[], SimFiles *files) {
-    /*
-     * 1. DEFAULT ARGUMENTS
-     * If no arguments are provided, use the default filenames specified in the
-     * project requirements. This allows for easy local testing.
-     */
+ /**
+  * @brief Parses input arguments into the SimFiles structure.
+  * * Order of arguments (if provided):
+  * imem0..3, memin, memout, regout0..3, coretrace0..3, bustrace, dsram0..3, tsram0..3, stats0..3.
+  */
+bool parse_arguments(int argc, char* argv[], SimFiles* files) {
+    /* 1. DEFAULT ARGUMENTS (Local Debugging Mode) */
     if (argc < 2) {
         files->imem_paths[0] = "imem0.txt"; files->imem_paths[1] = "imem1.txt";
         files->imem_paths[2] = "imem2.txt"; files->imem_paths[3] = "imem3.txt";
@@ -41,11 +39,7 @@ bool parse_arguments(int argc, char *argv[], SimFiles *files) {
         return true;
     }
 
-    /*
-     * 2. COMMAND LINE PARSING
-     * If arguments are provided, we expect exactly 27 arguments (plus the executable name).
-     * We map them to the SimFiles struct in the specified order.
-     */
+    /* 2. STRICT COMMAND LINE PARSING (Evaluation Mode) */
     if (argc != 28) {
         printf("Error: Expected 27 arguments, got %d\n", argc - 1);
         return false;
@@ -65,12 +59,10 @@ bool parse_arguments(int argc, char *argv[], SimFiles *files) {
     return true;
 }
 
-void load_imem_files(Core cores[], SimFiles *files) {
+void load_imem_files(Core cores[], SimFiles* files) {
     for (int c = 0; c < NUM_CORES; c++) {
-        FILE *fp = fopen(files->imem_paths[c], "r");
-        if (!fp) {
-            continue;
-        }
+        FILE* fp = fopen(files->imem_paths[c], "r");
+        if (!fp) continue;
 
         char line[64];
         int addr = 0;
@@ -82,8 +74,8 @@ void load_imem_files(Core cores[], SimFiles *files) {
     }
 }
 
-void load_memin_file(MainMemory *mem, SimFiles *files) {
-    FILE *fp = fopen(files->memin_path, "r");
+void load_memin_file(MainMemory* mem, SimFiles* files) {
+    FILE* fp = fopen(files->memin_path, "r");
     if (!fp) return;
 
     char line[64];
@@ -95,31 +87,35 @@ void load_memin_file(MainMemory *mem, SimFiles *files) {
     fclose(fp);
 }
 
-void write_core_trace(FILE *fp, Core *core, int cycle) {
+/**
+ * @brief Generates a trace line for the core execution.
+ * * Format: <cycle> <fetch_pc> <decode_pc> <execute_pc> <memory_pc> <writeback_pc> <R2..R15>
+ * * Uses "---" to represent pipeline bubbles or stalls.
+ */
+void write_core_trace(FILE* fp, Core* core, int cycle) {
     fprintf(fp, "%d ", cycle);
 
-    if (core->halt_detected) {
-        fprintf(fp, "--- ");
-    }
-    else {
-        fprintf(fp, "%03X ", core->pc & 0xFFF);
-    }
+    // 1. Current PC (Fetch stage candidate)
+    if (core->halt_detected) fprintf(fp, "--- ");
+    else fprintf(fp, "%03X ", core->pc & 0xFFF);
 
+    // 2. IF/ID Latch PC
     if (core->if_id.Instruction == 0 && core->if_id.PC == 0) fprintf(fp, "--- ");
     else fprintf(fp, "%03X ", core->if_id.PC & 0xFFF);
 
+    // 3. ID/EX Latch PC
     if (!core->id_ex.valid) fprintf(fp, "--- ");
     else fprintf(fp, "%03X ", core->id_ex.PC & 0xFFF);
 
+    // 4. EX/MEM Latch PC
     if (!core->ex_mem.valid) fprintf(fp, "--- ");
     else fprintf(fp, "%03X ", core->ex_mem.PC & 0xFFF);
 
-    if (!core->mem_wb.valid) {
-        fprintf(fp, "--- ");
-    } else {
-        fprintf(fp, "%03X ", core->mem_wb.PC & 0xFFF);
-    }
+    // 5. MEM/WB Latch PC
+    if (!core->mem_wb.valid) fprintf(fp, "--- ");
+    else fprintf(fp, "%03X ", core->mem_wb.PC & 0xFFF);
 
+    // 6. Register File (R2-R15)
     for (int i = 2; i < 16; i++) {
         fprintf(fp, "%08X", core->regs[i]);
         if (i < 15) fprintf(fp, " ");
@@ -127,22 +123,26 @@ void write_core_trace(FILE *fp, Core *core, int cycle) {
     fprintf(fp, "\n");
 }
 
-void write_bus_trace(FILE *fp, Bus *bus, int cycle) {
-    if (bus->bus_cmd == 0) return;
+/**
+ * @brief Logs bus transactions to the bus trace file.
+ * * Format: <cycle> <master_id> <cmd> <address> <data> <shared_flag>
+ */
+void write_bus_trace(FILE* fp, Bus* bus, int cycle) {
+    if (bus->bus_cmd == 0) return; // Only log active transactions
 
     fprintf(fp, "%d %X %X %06X %08X %X\n",
-            cycle,
-            bus->bus_origid,
-            bus->bus_cmd,
-            bus->bus_addr & 0xFFFFFF,
-            bus->bus_data,
-            bus->bus_shared
+        cycle,
+        bus->bus_origid,
+        bus->bus_cmd,
+        bus->bus_addr & 0xFFFFFF,
+        bus->bus_data,
+        bus->bus_shared
     );
 }
 
-void write_regout_files(Core cores[], SimFiles *files) {
+void write_regout_files(Core cores[], SimFiles* files) {
     for (int c = 0; c < NUM_CORES; c++) {
-        FILE *fp = fopen(files->regout_paths[c], "w");
+        FILE* fp = fopen(files->regout_paths[c], "w");
         if (!fp) continue;
         for (int i = 2; i < 16; i++) {
             fprintf(fp, "%08X\n", cores[c].regs[i]);
@@ -151,9 +151,9 @@ void write_regout_files(Core cores[], SimFiles *files) {
     }
 }
 
-void write_dsram_files(Core cores[], SimFiles *files) {
+void write_dsram_files(Core cores[], SimFiles* files) {
     for (int c = 0; c < NUM_CORES; c++) {
-        FILE *fp = fopen(files->dsram_paths[c], "w");
+        FILE* fp = fopen(files->dsram_paths[c], "w");
         if (!fp) continue;
 
         for (int s = 0; s < NUM_CACHE_SETS; s++) {
@@ -165,9 +165,13 @@ void write_dsram_files(Core cores[], SimFiles *files) {
     }
 }
 
-void write_tsram_files(Core cores[], SimFiles *files) {
+/**
+ * @brief Dumps Tag SRAM contents.
+ * * Each entry is formatted as: [0000][State(4 bits)][Tag(12 bits)]
+ */
+void write_tsram_files(Core cores[], SimFiles* files) {
     for (int c = 0; c < NUM_CORES; c++) {
-        FILE *fp = fopen(files->tsram_paths[c], "w");
+        FILE* fp = fopen(files->tsram_paths[c], "w");
         if (!fp) continue;
 
         for (int s = 0; s < NUM_CACHE_SETS; s++) {
@@ -180,9 +184,9 @@ void write_tsram_files(Core cores[], SimFiles *files) {
     }
 }
 
-void write_stats_files(Core cores[], SimFiles *files) {
+void write_stats_files(Core cores[], SimFiles* files) {
     for (int c = 0; c < NUM_CORES; c++) {
-        FILE *fp = fopen(files->stats_paths[c], "w");
+        FILE* fp = fopen(files->stats_paths[c], "w");
         if (!fp) continue;
 
         fprintf(fp, "cycles %d\n", cores[c].stats.cycles);
@@ -198,8 +202,12 @@ void write_stats_files(Core cores[], SimFiles *files) {
     }
 }
 
-void write_memout_file(MainMemory *mem, SimFiles *files) {
-    FILE *fp = fopen(files->memout_path, "w");
+/**
+ * @brief Writes the final main memory state.
+ * * Only writes addresses up to the highest non-zero entry to save space.
+ */
+void write_memout_file(MainMemory* mem, SimFiles* files) {
+    FILE* fp = fopen(files->memout_path, "w");
     if (!fp) return;
 
     int max_addr = -1;

@@ -1,64 +1,32 @@
 # ==============================================================================
 # Project: Multi-Core Cache Simulator (MIPS-like)
-# File:    new_counter/imem1.asm
-# Author:
-# ID:
-# Date:    11/11/2024
+# File:    imem1.asm
 #
 # Description:
-# Core 1 implementation of a shared counter update.
-# Uses modulo-based turn checking (Counter % 4 == 1).
+# Implementation for Core 1 of a shared atomic counter.
+# Coordinates via (Counter % 4 == 1) to ensure mutual exclusion.
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
-# REGISTER MAP
-# ------------------------------------------------------------------------------
-# $r2: Address of Shared Counter (0x0)
-# $r3: My Core ID (1)
-# $r4: Max Count (512)
-# $r5: Mask for Modulo 4 (3)
-# $r6: Current Counter Value
-# $r7: Sync Address (512)
-# $r8: Temporary result
-# ------------------------------------------------------------------------------
+# --- PHASE 1: INITIALIZATION ---
+add, $r2, $zero, $zero, 0      # Set R2 to Shared Counter Address (0)
+add, $r3, $zero, $imm, 1       # Set R3 to 1 (This Core's ID)
+add, $r4, $zero, $imm, 512     # Set R4 to Target Count (512)
+add, $r5, $zero, $imm, 3       # Set R5 to Modulo Mask (3)
+add, $r7, $zero, $imm, 512     # Set R7 to Sync Address (512)
 
-# ------------------------------------------------------------------------------
-# INITIALIZATION
-# ------------------------------------------------------------------------------
-add, $r2, $zero, $zero, 0      # R2 = 0
-add, $r3, $zero, $imm, 1       # R3 = 1 (My Core ID)
-add, $r4, $zero, $imm, 512     # R4 = 512
-add, $r5, $zero, $imm, 3       # R5 = 3
-add, $r7, $zero, $imm, 512     # R7 = 512
+# --- PHASE 2: SPIN-LOCK ---
+lw, $r6, $r2, $zero, 0         # [PC 5] Fetch shared counter from memory
+beq, $imm, $r6, $r4, 12        # [PC 6] Check if simulation is complete (Total = 512)
 
-# ------------------------------------------------------------------------------
-# MAIN LOOP
-# ------------------------------------------------------------------------------
-# PC=5: Load current counter
-lw, $r6, $r2, $zero, 0         
+# Verify turn: Does (Counter & 3) match CoreID 1?
+and, $r8, $r6, $r5, 0          # [PC 7] Isolate last two bits of counter
+bne, $imm, $r8, $r3, 5         # [PC 8] If turn index != 1, spin (back to PC 5)
 
-# PC=6: Check termination
-beq, $imm, $r6, $r4, 12
+# --- PHASE 3: CRITICAL SECTION ---
+add, $r6, $r6, $imm, 1         # [PC 9] Increment counter
+sw, $r6, $r2, $zero, 0         # [PC 10] Commit update to shared memory
+beq, $imm, $zero, $zero, 5     # [PC 11] Repeat loop
 
-# PC=7: Check Turn (Counter % 4 == 1)
-and, $r8, $r6, $r5, 0
-bne, $imm, $r8, $r3, 5
-
-# ------------------------------------------------------------------------------
-# CRITICAL SECTION
-# ------------------------------------------------------------------------------
-# PC=9: Increment
-add, $r6, $r6, $imm, 1
-
-# PC=10: Store
-sw, $r6, $r2, $zero, 0
-
-# PC=11: Loop
-beq, $imm, $zero, $zero, 5
-
-# ------------------------------------------------------------------------------
-# TERMINATION
-# ------------------------------------------------------------------------------
-# PC=12: Final Sync
-lw, $r8, $r7, $zero, 0
-halt, $zero, $zero, $zero, 0
+# --- PHASE 4: TERMINATION ---
+lw, $r8, $r7, $zero, 0         # [PC 12] Final sync memory access
+halt, $zero, $zero, $zero, 0   # Stop Core 1 execution

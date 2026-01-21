@@ -1,14 +1,10 @@
 /*
  * Project: Multi-Core Cache Simulator (MIPS-like)
  * File:    main.c
- * Author:
- * ID:
- * Date:    11/11/2024
- *
- * Description:
- * The main entry point of the simulation. Orchestrates the cycle-by-cycle
- * execution of Cores, Bus, and Memory. Manages the main simulation loop,
- * arbitration logic, and trace generation.
+ * * Description:
+ * This is the central engine of the simulation. It models a synchronous hardware
+ * environment by dividing each clock cycle into discrete phases: Arbitration,
+ * Bus Driving, Snooping, and Pipeline Execution.
  */
 
 #include <stdio.h>
@@ -20,41 +16,37 @@
 #include "memory.h"
 #include "io_handler.h"
 
-void gather_bus_requests(Core cores[], MainMemory *mem, bool requests[5]) {
+ /**
+  * @brief Scans the system for bus access requests.
+  * * Cores request the bus for:
+  * - L1 Cache Misses (requiring a Fill).
+  * - Write Misses or Upgrades (BusRdX).
+  * - Conflict Evictions (requiring a Flush of dirty data).
+  */
+void gather_bus_requests(Core cores[], MainMemory* mem, bool requests[5]) {
     for (int i = 0; i < 5; i++) requests[i] = false;
 
-    /*
-     * 1. MEMORY PRIORITY
-     * If Memory is currently processing a read (latency countdown active),
-     * it effectively holds a request to send data back when ready.
-     * (Though arbitration usually handles this via the 'busy' flag or specific grant).
+    /* 1. MEMORY PRIORITY
+     * Memory requests the bus when its latency timer has expired and it is
+     * ready to return data to a core.
      */
     if (mem->processing_read) {
         requests[4] = true;
-        return; 
+        return;
     }
 
-    /*
-     * 2. CORE REQUESTS
-     * Check each core to see if it needs the bus.
-     * A core needs the bus if:
-     * - It is stalled at the Memory stage.
-     * - It has a valid instruction (Load/Store).
-     * - It has a pending address (miss detected).
-     * - It is NOT already waiting for a fill (request already sent).
-     */
+    /* 2. CORE REQUESTS */
     for (int i = 0; i < NUM_CORES; i++) {
+        // A core needs the bus if it is stalled at the MEM stage and needs a fill
         bool needs_bus = cores[i].stall &&
-                         cores[i].ex_mem.valid &&
-                         cores[i].l1_cache.pending_addr != 0xFFFFFFFF && 
-                         !cores[i].l1_cache.is_waiting_for_fill;
+            cores[i].ex_mem.valid &&
+            cores[i].l1_cache.pending_addr != 0xFFFFFFFF &&
+            !cores[i].l1_cache.is_waiting_for_fill;
 
-        // <--- ADD THIS BLOCK --->
-        // Also request bus if we need to evict dirty data
+        // Higher priority: Core needs the bus to evict a Modified block
         if (cores[i].l1_cache.eviction_pending) {
             needs_bus = true;
         }
-        // <----------------------->
 
         if (needs_bus) {
             requests[i] = true;
@@ -62,46 +54,50 @@ void gather_bus_requests(Core cores[], MainMemory *mem, bool requests[5]) {
     }
 }
 
-
-void drive_bus_from_core(Core *core, Bus *bus) {
+/**
+ * @brief Translates core state into bus signal transitions.
+ * * If a core is granted the bus, it drives its request (Read/ReadX)
+ * onto the bus wires.
+ */
+void drive_bus_from_core(Core* core, Bus* bus) {
     if (bus->current_grant != core->id) return;
 
-    // 1. Handle Eviction Grant
+    /* 1. Handle Eviction Grant */
     if (core->l1_cache.eviction_pending) {
-        // Transition from "Pending" to "Active Flushing"
+        // Transition internal cache state to actively flushing
         core->l1_cache.is_flushing = true;
         core->l1_cache.eviction_pending = false;
         core->l1_cache.flush_offset = 0;
-
-        // We don't drive the bus data here directly.
-        // Setting 'is_flushing' will cause cache_snoop (in the next phase)
-        // to drive the bus with BUS_CMD_FLUSH.
         return;
     }
 
-    EX_MEM_Latch *latch = &core->ex_mem;
+    EX_MEM_Latch* latch = &core->ex_mem;
     if (!latch->valid) return;
 
+    /* 2. Drive Physical Signals */
     bus->bus_origid = core->id;
-    bus->bus_addr = latch->ALUOutput; 
+    bus->bus_addr = latch->ALUOutput;
 
     if (latch->Op == OP_LW) {
         bus->bus_cmd = BUS_CMD_READ;
-    } else if (latch->Op == OP_SW) {
+    }
+    else if (latch->Op == OP_SW) {
         bus->bus_cmd = BUS_CMD_READX;
     }
 
-    /*
-     * MARK AS WAITING
-     * Once the request is on the bus, the core enters "Waiting for Fill" state.
-     * It will stop requesting the bus and start listening for data.
+    /* * Once driven, the core enters a wait state. It will stop requesting
+     * the bus and wait for either a snoop hit (from another cache)
+     * or a memory response.
      */
     core->l1_cache.is_waiting_for_fill = true;
 }
 
-int main(int argc, char *argv[]) {
-    
-    // 1. SETUP
+/**
+ * @brief Main simulation entry point and loop.
+ */
+int main(int argc, char* argv[]) {
+
+    /* 1. SYSTEM INITIALIZATION */
     SimFiles files;
     if (!parse_arguments(argc, argv, &files)) return 1;
 
@@ -117,8 +113,9 @@ int main(int argc, char *argv[]) {
         core_init(&cores[i], i, files.imem_paths[i]);
     }
 
-    FILE *trace_files[NUM_CORES];
-    FILE *bus_trace_file = fopen(files.bustrace_path, "w");
+    // Open trace files
+    FILE* trace_files[NUM_CORES];
+    FILE* bus_trace_file = fopen(files.bustrace_path, "w");
     for (int i = 0; i < NUM_CORES; i++) {
         trace_files[i] = fopen(files.coretrace_paths[i], "w");
     }
@@ -126,83 +123,85 @@ int main(int argc, char *argv[]) {
     int cycle = 0;
     bool active = true;
 
-    // 2. MAIN LOOP
+    /* 2. CLOCK CYCLE LOOP */
     while (active) {
-        
-        // A. Reset Bus Signals (Start of Cycle)
+
+        // Phase A: Reset transient bus wires
         bus_reset_signals(&bus);
 
-        // B. Arbitration Phase
+        // Phase B: Bus Arbitration
         bool requests[5];
         gather_bus_requests(cores, &main_memory, requests);
         bus_arbitrate(&bus, requests);
 
-        // C. Bus Driving Phase
-        // Check if any core is "hijacking" the bus for a Flush (highest priority)
+        // Phase C: Bus Driving
         bool any_hijack = false;
-        for (int i=0; i<NUM_CORES; i++) {
-             if (cores[i].l1_cache.is_flushing) any_hijack = true;
+        for (int i = 0; i < NUM_CORES; i++) {
+            if (cores[i].l1_cache.is_flushing) any_hijack = true;
         }
 
-        // If no flush is happening, let the granted core drive the bus
+        // Only allow core request if no cache is currently flushing (data transfer)
         if (!any_hijack && bus.current_grant < 4 && bus.current_grant >= 0) {
             drive_bus_from_core(&cores[bus.current_grant], &bus);
-            bus.busy = false; 
+            bus.busy = false;
         }
 
-        // D. Snooping / Memory Response Phase
-        // Order matters: If Memory is driving, Cores snoop. If Core is driving, Memory listens.
+        // Phase D: Snoop / Response Logic
         if (bus.current_grant == 4) {
+            // Memory is driving; Cores listen
             memory_listen(&main_memory, &bus);
             for (int i = 0; i < NUM_CORES; i++) cache_snoop(&cores[i].l1_cache, &bus);
-        } else {
+        }
+        else {
+            // Cores may be driving; Memory and other Cores listen
             for (int i = 0; i < NUM_CORES; i++) cache_snoop(&cores[i].l1_cache, &bus);
             memory_listen(&main_memory, &bus);
         }
 
-        // E. Shared Signal Propagation
+        // Phase E: Global 'Shared' Wire Propagation
         if (bus.bus_shared) {
             if (bus.bus_origid < 4) {
                 cores[bus.bus_origid].l1_cache.snoop_result_shared = true;
             }
-            // Special case: If data is being flushed, the waiting core also needs to know it's shared
+            // If data is currently flying on the bus, the requester latches the shared bit
             if (bus.bus_cmd == BUS_CMD_FLUSH) {
                 for (int i = 0; i < NUM_CORES; i++) {
                     if (cores[i].l1_cache.is_waiting_for_fill &&
-                       (cores[i].l1_cache.pending_addr & ~0x7) == (bus.bus_addr & ~0x7)) {
+                        (cores[i].l1_cache.pending_addr & ~0x7) == (bus.bus_addr & ~0x7)) {
                         cores[i].l1_cache.snoop_result_shared = true;
-                       }
+                    }
                 }
             }
         }
 
-        // F. Trace Generation
+        // Phase F: Logging and Tracing
         if (bus_trace_file) {
             write_bus_trace(bus_trace_file, &bus, cycle);
         }
 
-        // G. Core Execution Phase
+        // Phase G: Architecture State Transition (Clock Edge)
         bool all_halted = true;
         for (int i = 0; i < NUM_CORES; i++) {
             if (cores[i].halted) continue;
             write_core_trace(trace_files[i], &cores[i], cycle);
-            core_cycle(&cores[i], &bus); 
+            core_cycle(&cores[i], &bus);
             if (!cores[i].halted) all_halted = false;
         }
 
-        // H. End of Cycle Checks
+        // Phase H: Loop Exit Conditions
         if (all_halted) active = false;
         cycle++;
-        if (cycle > 500000) break;
+        if (cycle > 500000) break; // Safety timeout
     }
 
-    // 3. FINAL OUTPUT
+    /* 3. POST-SIMULATION STATE DUMPS */
     write_regout_files(cores, &files);
     write_dsram_files(cores, &files);
     write_tsram_files(cores, &files);
     write_stats_files(cores, &files);
     write_memout_file(&main_memory, &files);
 
+    // Cleanup
     for (int i = 0; i < NUM_CORES; i++) if (trace_files[i]) fclose(trace_files[i]);
     if (bus_trace_file) fclose(bus_trace_file);
 
