@@ -53,4 +53,4 @@ Thumbs.db
 Desktop.ini
 
 # PDF
-# REMOVED *.pdf (You NEED to submit your report)
+*.pdf
