@@ -1,4 +1,3 @@
-#define _CRT_SECURE_NO_WARNINGS // For Windows compatibility
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
